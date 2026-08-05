@@ -1996,8 +1996,8 @@ At the time recorded above, every untracked `src/video_knowledge_pipeline/*.py` 
 
 ## 2026-08-05 统一多模型网关薄适配
 
-更新时间：2026-08-05 17:40:00 +08:00 | Codex / GPT-5.6
+更新时间：2026-08-05 23:10:00 +08:00 | Codex / GPT-5.6
 
 | 上游模块 | 固定版本 | 状态 | 意图 / 决策 / 理由 / 证据 / 生效范围 / 回滚 |
 | --- | --- | --- | --- |
-| lightcoloror/model-provider-gateway | `24d6aafca23c4fa836f25ce19d3a5d428d962354` / AGPL-3.0-only | **public shared control plane / optional VKP adapter implemented** | 意图：让研究、写作、视频生成与 VKP 复用审核 Provider preset、secret 引用、route/consent plan 和 adapter contract；决策：VKP 只增加 optional extra 与精确 profile/route 投影，Provider、Base URL、模型、能力和 options 不完全相同即 fail-closed；理由：不能复制第二套网关状态机或凭 OpenAI-compatible 静默开放任意目的地；证据：共享项目 33/33 双跑、LiteLLM local stub parity、Gitleaks/path scan、GitHub PUBLIC/AGPL 回读，VKP focused 回归；生效范围：配置投影，不读取 secret、不调用 Provider、不改变 VKP Broker/consent/runtime；回滚：移除 optional extra 与薄适配器，原 VKP 网关不变。详细记录：`docs/model-provider-gateway-adapter-2026-08-05.md`。 |
+| lightcoloror/model-provider-gateway | `c5f3ec49644453e0cddb56350e3b243b49e0f7da` / AGPL-3.0-only | **public shared canonical text/vision execution / VKP owner-gated request adapter implemented** | 意图：让研究、写作、视频生成与 VKP 复用审核 Provider preset、route/consent、LiteLLM execution request/result 和脱敏审计；决策：VKP 只增加 optional extra、精确 profile/route 投影和 Broker receipt 绑定的 request builder，不解析 secret、不直接执行 Provider；理由：不能复制第二套网关状态机，也不能让共享执行层绕过 VKP business authorization/Broker；证据：共享项目 53/53 双跑、LiteLLM text/vision loopback、build/脱敏扫描，VKP 10/10 focused 回归；生效范围：可选 text/vision 请求投影，ASR/OCR 仍由 VKP 持有且共享 Wave 1 blocked；回滚：移除 optional extra 与薄适配器，原 VKP 网关不变。详细记录：`docs/model-provider-gateway-adapter-2026-08-05.md`。 |

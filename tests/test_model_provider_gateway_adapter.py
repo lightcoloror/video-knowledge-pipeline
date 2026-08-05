@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+import base64
+
 import pytest
 
 pytest.importorskip("model_provider_gateway")
 
+from model_provider_gateway.consent import build_consent_plan
+
 from video_knowledge_pipeline.model_provider_gateway_adapter import (
     reviewed_shared_preset,
     shared_vkp_adapter_contract,
+    vkp_execution_request_to_shared,
     vkp_route_to_shared,
 )
 
@@ -68,8 +73,13 @@ def test_exact_vkp_profile_maps_to_reviewed_shared_preset() -> None:
     second = vkp_route_to_shared(
         _settings(profile), task="semantic_frame", max_calls=2, max_cost_usd=0.25
     )
-    assert first["schema"] == "video_knowledge_pipeline.model_provider_gateway_adapter.v1"
-    assert first["shared_route"]["route_revision"] == second["shared_route"]["route_revision"]
+    assert (
+        first["schema"] == "video_knowledge_pipeline.model_provider_gateway_adapter.v2"
+    )
+    assert (
+        first["shared_route"]["route_revision"]
+        == second["shared_route"]["route_revision"]
+    )
     assert first["profiles"][0]["auth_ref"] == "dpapi:remote-gemini"
     assert first["profiles"][0]["model"] == "gemini-3.6-flash"
     assert first["profiles"][0]["provenance"]["vkp_source"]["route_revision"]
@@ -79,13 +89,20 @@ def test_exact_vkp_profile_maps_to_reviewed_shared_preset() -> None:
 
 def test_adapter_contract_is_shared_and_route_bound() -> None:
     contract = shared_vkp_adapter_contract()
-    assert contract["schema"] == "model_provider_gateway.adapter_contract.v1"
+    assert contract["schema"] == "model_provider_gateway.adapter_contract.v2"
     assert contract["consumer_id"] == "vkp"
-    assert contract["tasks"] == {
-        "text": ["text"],
-        "visual": ["vision"],
-        "asr": ["asr"],
+    assert contract["tasks"]["text"] == {
+        "capabilities": ["text"],
+        "execution_status": "enabled",
+        "control_policy": "vkp_broker",
     }
+    assert contract["tasks"]["visual"] == {
+        "capabilities": ["vision"],
+        "execution_status": "enabled",
+        "control_policy": "vkp_broker",
+    }
+    assert contract["tasks"]["asr"]["execution_status"] == "blocked"
+    assert contract["tasks"]["ocr"]["execution_status"] == "blocked"
 
 
 @pytest.mark.parametrize(
@@ -97,7 +114,9 @@ def test_adapter_contract_is_shared_and_route_bound() -> None:
         ("location", "local", "remote VKP profiles only"),
     ],
 )
-def test_unreviewed_or_legacy_profiles_fail_closed(field: str, value: str, message: str) -> None:
+def test_unreviewed_or_legacy_profiles_fail_closed(
+    field: str, value: str, message: str
+) -> None:
     profile = _profile()
     profile[field] = value
     with pytest.raises(ValueError, match=message):
@@ -128,3 +147,72 @@ def test_multiple_deployments_require_explicit_fallback() -> None:
         "requires_consent": True,
     }
     assert result["silent_fallback_allowed"] is False
+
+
+def test_vkp_broker_receipt_builds_canonical_shared_request(tmp_path) -> None:
+    image = tmp_path / "synthetic.png"
+    image.write_bytes(
+        base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+        )
+    )
+    projection = vkp_route_to_shared(
+        _settings(_profile()),
+        task="semantic_frame",
+        max_calls=1,
+        max_cost_usd=0.25,
+    )
+    consent = build_consent_plan(
+        projection["shared_route"],
+        [image],
+        capability="vision",
+        purpose="Synthetic VKP owner-gate test.",
+        data_type="synthetic_image",
+        max_calls=1,
+        max_cost_usd=0.25,
+    )
+    request = vkp_execution_request_to_shared(
+        projection,
+        consent,
+        task="visual",
+        max_estimated_cost_usd=0.1,
+        broker_receipt_hash="a" * 64,
+        request_id="vkp-owner-gate-test",
+    )
+    assert request["schema"] == "model_provider_gateway.execution_request.v1"
+    assert request["consumer_id"] == "vkp"
+    assert request["provider_id"] == "gemini"
+    assert request["owner_gate_receipt_hash"] == "a" * 64
+    assert projection["provider_execution_performed"] is False
+
+
+def test_vkp_canonical_request_requires_existing_broker_receipt(tmp_path) -> None:
+    image = tmp_path / "synthetic.png"
+    image.write_bytes(
+        base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+        )
+    )
+    projection = vkp_route_to_shared(
+        _settings(_profile()),
+        task="semantic_frame",
+        max_calls=1,
+        max_cost_usd=0.25,
+    )
+    consent = build_consent_plan(
+        projection["shared_route"],
+        [image],
+        capability="vision",
+        purpose="Synthetic VKP owner-gate test.",
+        data_type="synthetic_image",
+        max_calls=1,
+        max_cost_usd=0.25,
+    )
+    with pytest.raises(ValueError, match="Broker reservation receipt"):
+        vkp_execution_request_to_shared(
+            projection,
+            consent,
+            task="visual",
+            max_estimated_cost_usd=0.1,
+            broker_receipt_hash="",
+        )

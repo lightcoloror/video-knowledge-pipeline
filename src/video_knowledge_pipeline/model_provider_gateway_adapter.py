@@ -9,7 +9,7 @@ from .canonical_json import canonical_json_sha256
 from .model_route_settings import resolve_model_route
 
 
-ADAPTER_SCHEMA = "video_knowledge_pipeline.model_provider_gateway_adapter.v1"
+ADAPTER_SCHEMA = "video_knowledge_pipeline.model_provider_gateway_adapter.v2"
 _PROVIDER_ALIASES = {
     "openai": "openai",
     "anthropic": "anthropic",
@@ -44,9 +44,13 @@ def shared_vkp_adapter_contract() -> dict[str, Any]:
 
 def reviewed_shared_preset(profile: dict[str, Any]) -> str:
     if str(profile.get("location") or "") != "remote":
-        raise ValueError("shared provider presets currently accept remote VKP profiles only")
+        raise ValueError(
+            "shared provider presets currently accept remote VKP profiles only"
+        )
     if str(profile.get("adapter_backend") or "") != "proxy":
-        raise ValueError("legacy VKP providers must not silently migrate to the shared gateway")
+        raise ValueError(
+            "legacy VKP providers must not silently migrate to the shared gateway"
+        )
     shared_provider = _PROVIDER_ALIASES.get(str(profile.get("provider") or ""))
     if not shared_provider:
         raise ValueError("VKP provider has no reviewed shared-gateway mapping")
@@ -62,10 +66,14 @@ def reviewed_shared_preset(profile: dict[str, Any]) -> str:
         and capabilities <= set(candidate["capabilities"])
     ]
     if len(matches) != 1:
-        raise ValueError("VKP profile does not exactly match one reviewed shared-gateway preset")
+        raise ValueError(
+            "VKP profile does not exactly match one reviewed shared-gateway preset"
+        )
     expected_options = dict(matches[0].get("provider_options") or {})
     if dict(profile.get("provider_options") or {}) != expected_options:
-        raise ValueError("VKP provider options drifted from the reviewed shared-gateway preset")
+        raise ValueError(
+            "VKP provider options drifted from the reviewed shared-gateway preset"
+        )
     return str(matches[0]["preset_id"])
 
 
@@ -150,3 +158,49 @@ def vkp_route_to_shared(
         "provider_execution_performed": False,
         "silent_fallback_allowed": False,
     }
+
+
+def vkp_execution_request_to_shared(
+    projection: dict[str, Any],
+    consent: dict[str, Any],
+    *,
+    task: str,
+    max_estimated_cost_usd: float,
+    broker_receipt_hash: str,
+    selected_profile_id: str = "",
+    request_id: str | None = None,
+) -> dict[str, Any]:
+    """Build the shared canonical request without executing or resolving VKP secrets."""
+
+    if projection.get("schema") != ADAPTER_SCHEMA:
+        raise ValueError("unsupported VKP shared-gateway projection schema")
+    profiles = list(projection.get("profiles") or [])
+    if selected_profile_id:
+        profiles = [
+            row
+            for row in profiles
+            if str(row.get("profile_id") or "") == selected_profile_id
+        ]
+    elif len(profiles) != 1:
+        raise ValueError(
+            "multi-deployment VKP routes require an explicit selected_profile_id"
+        )
+    if len(profiles) != 1:
+        raise ValueError(
+            "selected VKP shared-gateway profile was not found exactly once"
+        )
+    request = _shared("execution").build_execution_request(
+        profiles[0],
+        dict(projection.get("shared_route") or {}),
+        consent,
+        consumer_id="vkp",
+        task=task,
+        max_estimated_cost_usd=max_estimated_cost_usd,
+        request_id=request_id,
+        owner_gate_receipt_hash=broker_receipt_hash,
+    )
+    if request.get("owner_gate_receipt_hash") != broker_receipt_hash:
+        raise ValueError(
+            "shared execution request did not preserve the VKP Broker receipt hash"
+        )
+    return request
