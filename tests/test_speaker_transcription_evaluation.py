@@ -158,7 +158,7 @@ def test_real_meeteval_cp_and_tcp_cer_map_swapped_anonymous_labels() -> None:
             "speaker": "reference-b",
             "start": 1.0,
             "end": 2.0,
-            "tokens": list("佛医保"),
+            "tokens": list("会议纪要"),
         },
     ]
     hypothesis = [
@@ -172,7 +172,7 @@ def test_real_meeteval_cp_and_tcp_cer_map_swapped_anonymous_labels() -> None:
             "speaker": "hypothesis-x",
             "start": 1.0,
             "end": 2.0,
-            "tokens": list("佛医保"),
+            "tokens": list("会议纪要"),
         },
     ]
 
@@ -258,13 +258,13 @@ def test_required_speaker_transcription_participates_in_stability_gate(
                 "speaker": "说话人1",
                 "start": 0.0,
                 "end": 1.0,
-                "text": "佛医保。",
+                "text": "会议纪要。",
             },
             {
                 "speaker": "说话人2",
                 "start": 1.0,
                 "end": 2.0,
-                "text": "送了意外险！",
+                "text": "发了一份材料！",
             },
         ],
     }
@@ -278,8 +278,8 @@ def test_required_speaker_transcription_participates_in_stability_gate(
     assert report["status"] == "failed"
     assert report["gates"]["speaker_transcription"] is False
     assert report["diagnostic_statuses"] == ["speaker_transcription_evaluated"]
-    assert captured["reference"][0]["tokens"] == list("佛医保")
-    assert captured["reference"][1]["tokens"] == list("送了意外险")
+    assert captured["reference"][0]["tokens"] == list("会议纪要")
+    assert captured["reference"][1]["tokens"] == list("发了一份材料")
     assert captured["kwargs"]["required"] is True
 
 
@@ -292,13 +292,13 @@ def test_real_meeteval_stability_gate_passes_identical_speaker_transcript() -> N
                 "speaker": "说话人1",
                 "start": 0.0,
                 "end": 1.0,
-                "text": "根据情况来的嘛。",
+                "text": "根据排期来的嘛。",
             },
             {
                 "speaker": "说话人2",
                 "start": 1.0,
                 "end": 2.0,
-                "text": "明亚保险。",
+                "text": "星河系统。",
             },
         ],
     }

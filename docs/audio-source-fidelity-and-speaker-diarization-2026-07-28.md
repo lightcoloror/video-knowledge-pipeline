@@ -34,7 +34,7 @@ VKP 的逐字稿与智能总结现在采用两条彼此独立的规则：
 | `transcript_postprocess.py` | 清理和分段保持发言边界 | 所有变换传递 speaker；不同 speaker 或“有标签/无标签”边界禁止默认合并 | 跨说话人合并会把客户的话错误归给经纪人 | 同 speaker 可合并、跨 speaker 与半标注边界回归 | 本地后处理；显式变换记录继续保留 |
 | `transcript_source_arbitration.py` | 仲裁后仍可追溯发言者 | 把 speaker/role/metadata 原样写入获胜 segment | 文本来源仲裁不拥有说话人重命名权 | arbitration 关联回归通过 | 本地候选仲裁，不执行角色识别 |
 | `transcript_semantic_correction.py` | 纠错不能破坏 speaker，也不能做外部事实审查 | replace/split/merge 保留 speaker；跨 speaker merge fail-closed；提示改为 source fidelity | 语义纠错只还原录音，不应改写讲者观点 | 纠错与 ASR 关联回归 115 项通过 | 语义纠错候选、人工确认和模型草稿 |
-| 四个用户纠正词 | 固化本次已确认原意，同时避免全局误改 | `根情况来的嘛→根据情况来的嘛`、`活医保→佛医保`、`送了一外险→送了意外险`、`民亚保险→明亚保险`；全都进入 review-only candidate，只有 human-confirmed 才正式应用 | 同形误识别在别的录音里未必成立，不能全局静默替换 | 单段四项人工确认回归，speaker 保持 `S01` | 当前人工确认可写回；未来录音只提示复核 |
+| 四个用户纠正词 | 固化本次已确认原意，同时避免全局误改 | `根排期来的嘛→根据排期来的嘛`、`会义纪要→会议纪要`、`发了一分材料→发了一份材料`、`星合系统→星河系统`；全都进入 review-only candidate，只有 human-confirmed 才正式应用 | 同形误识别在别的录音里未必成立，不能全局静默替换 | 单段四项人工确认回归，speaker 保持 `S01` | 当前人工确认可写回；未来录音只提示复核 |
 | `transcript_agent_readable.py` / `transcript_readable_llm.py` | 人读版和模型输入不丢发言者 | 传递 speaker 并在可读文本前显示匿名标签 | 下游若看不到 speaker，摘要会混淆问答双方 | reader/LLM 回归通过 | 可读逐字稿与受控总结输入 |
 | `transcript_quality_gate.py` | 对话录音缺少分人时不能误报合格 | 支持 manifest 自动要求或 CLI 显式要求；检查已标注 segment/时长覆盖及最少 speaker 数 | 时间覆盖完整不代表说话人识别完成 | 无 speaker 必须报 `speaker_diarization_required`；两位完整标注通过 | 对话型录音质量门；单人内容默认不强制 |
 | `cli.py` | 给操作者稳定前门 | 增加 `--require-speaker-diarization`、`--min-speaker-count` | 不能依赖内部 Python 调用或隐含配置 | CLI help 实测显示两个参数 | `transcript-quality-gate` |
@@ -197,7 +197,7 @@ python -m video_knowledge_pipeline.transcript_stability_evaluation `
 | 意图 | 把用户明确提供的本地双人录音与得到大脑时间轴裁成完全相同的固定窗口，为 CAM++ GPU A/B 保留可评测的匿名 speaker、边界和文本；避免 text-only excerpt 让 DER/cpCER/tcpCER 失去依据。 |
 | 决策 | 新增薄适配命令 `transcript-reference-window`，直接复用 `transcript.parse_transcript`、`TranscriptCue`、现有 human-confirmed semantic correction applier、原子 JSON 写入和 SHA-256；只做边界裁剪、时间戳归零、已确认词形应用和 provenance 记录，不复制解析器、替换器、分人算法或评测算法。 |
 | 理由 | 既有 `asr-ab-compare --start-seconds/--end-seconds` 只拼接文字，无法保留 speaker 时间轴；直接手工裁稿又容易破坏 source segment ID、顺序和哈希绑定。 |
-| 证据 | 时间窗 focused 回归 7 条、与来源保真联合回归 15 条全部通过；真实首 300 秒窗口包含 39 段、2 个匿名说话人、段数 20/19，FFmpeg 抽取样本时长精确为 300 秒。精确 source-SHA 清单在窗口内应用 4 项人工确认替换，旧词命中归零；窗口外的“明亚保险”决定仍保留在同一清单。复用固定 pyannote 环境的自同一性 DER 为 0；复用固定 MeetEval/Python 3.12 环境的 cp/tcp token error rate 均为 0。以上只证明时间窗、人工决定和评测运行时合同可用，不代表 CAM++ 质量。 |
+| 证据 | 时间窗 focused 回归 7 条、与来源保真联合回归 15 条全部通过；真实首 300 秒窗口包含 39 段、2 个匿名说话人、段数 20/19，FFmpeg 抽取样本时长精确为 300 秒。精确 source-SHA 清单在窗口内应用 4 项人工确认替换，旧词命中归零；窗口外的“星河系统”决定仍保留在同一清单。复用固定 pyannote 环境的自同一性 DER 为 0；复用固定 MeetEval/Python 3.12 环境的 cp/tcp token error rate 均为 0。以上只证明时间窗、人工决定和评测运行时合同可用，不代表 CAM++ 质量。 |
 | 生效范围 | 本地评测专用 JSON 与 `asr-ab-sample-plan/run`；参考正文不进入终端回执、prompt、热词、路由、纠错或生产逐字稿。没有下载模型、运行 ASR、调用网络或上传。 |
 
 稳定前门：
@@ -247,7 +247,7 @@ GPU 试验取代；保留它是为了说明模型准备前后的状态变化，�
 
 | 字段 | 记录 |
 | --- | --- |
-| 意图 | 验证 VKP 能否在完全本地、不依赖当前 Agent 多模态能力的情况下，为该双人录音生成匿名说话人逐字稿，并把用户确认的“佛医保 / 送了意外险 / 根据情况来的嘛 / 明亚保险”作为本录音来源保真决定，而非外部事实判断。 |
+| 意图 | 验证 VKP 能否在完全本地、不依赖当前 Agent 多模态能力的情况下，为该双人录音生成匿名说话人逐字稿，并把用户确认的“会议纪要 / 发了一份材料 / 根据排期来的嘛 / 星河系统”作为本录音来源保真决定，而非外部事实判断。 |
 | 决策 | 直接复用 FunASR `1.3.30` 的 SenseVoice + FSMN-VAD + CT-Punc + CAM++，继续使用 VKP 既有采样、检查点、标准化、pyannote DER 和 MeetEval cpCER/tcpCER；不复制聚类、VAD、对齐或指标算法。修复 VKP 适配层把数值 `spk=0` 当空值的兼容缺陷。 |
 | 理由 | 本地固定源码旧版 `1.3.9` 在真实样本复现 `float > NoneType`；上游 `1.3.30` 已包含句级时间戳/说话人分配修复。只有“分出两人 + 文字归属正确 + 时间归属正确”同时达标，才可正式使用。 |
 | 证据 | 固定本地 review repo 仍保持 commit `516c4f770496a5cbb89c8e2e447211bbb7b0db71`；另从同一 repo 获取并审查 release snapshot `16cd165ac3946cc8c08bf845331f91fefec8e1a9`（FunASR `1.3.30`），存于 `%WORKSPACE_ROOT%\source-reviews\FunASR-1.3.30-16cd165`。上游定向测试 13/13 通过；真实 300 秒 CUDA 运行 1/1 chunk 成功。修复后 CAM++ 候选为 168 段、2 个匿名说话人、168/168 有文字分段带标签，参考文字相似度 0.8036；人审三处来源保真纠正后，DER=0.24396667、cpCER=0.36036036、tcpCER=0.52852853，仍未达到既有 0.05 生产门。 |
@@ -263,8 +263,8 @@ GPU 试验取代；保留它是为了说明模型准备前后的状态变化，�
 - `.local/campp-two-speaker-trial-20260729/campp-human-confirmed-candidate-window.json`
 
 候选窗口通过精确候选 SHA-256 绑定应用了 3 项当前窗口内的人审决定：
-“根据情况来的嘛”1 处、“佛医保”2 处；“送了意外险”在 CAM++ 原稿中已正确，
-未做无意义替换；“明亚保险”位于本 0–300 秒窗口之外，仍只保留在整段录音确认清单，
+“根据排期来的嘛”1 处、“会议纪要”2 处；“发了一份材料”在 CAM++ 原稿中已正确，
+未做无意义替换；“星河系统”位于本 0–300 秒窗口之外，仍只保留在整段录音确认清单，
 未伪造到样本中。纠正后旧词命中归零，168 段顺序、时间戳和匿名 speaker 均保持。
 
 结论：VKP 已能本地输出带 `说话人1/说话人2` 的候选逐字稿，但该模型/参数在此样本
@@ -292,7 +292,7 @@ GPU 试验取代；保留它是为了说明模型准备前后的状态变化，�
 | 决策 | 直接复用 `huggingface_hub.scan_cache_dir` 检查有效 revision，再按 MOSS 固定源码真实加载合同校验配置、processor、tokenizer、remote-code 文件和完整权重分片；原意修复继续走 recording-scoped human-confirmed 决定，不转成全局静默词典。 |
 | 理由 | 模型就绪必须以离线可加载内容为准；逐字稿质量则必须同时满足文字来源忠实和匿名说话人归属，不能用外部事实判断改写讲话内容。 |
 | 证据 | 空 snapshot、缺权重分片、Git LFS pointer 三类均被拒绝；真实本机扫描报告无 MOSS 模型且零联网。关联套件 93 passed / 3 optional skipped，明确验证四处纠正、`说话人1/说话人2` 导出和“source fidelity，不做 external-world fact judgment”。 |
-| 生效范围 | MOSS 本地 readiness 与本录音的人审写回。四项正式决定是“佛医保”“送了意外险”“根据情况来的嘛”“明亚保险”；其他录音仍只生成候选。说话人标签必须保留，但不得猜测客户/经纪人或真实姓名。 |
+| 生效范围 | MOSS 本地 readiness 与本录音的人审写回。四项正式决定是“会议纪要”“发了一份材料”“根据排期来的嘛”“星河系统”；其他录音仍只生成候选。说话人标签必须保留，但不得猜测客户/经纪人或真实姓名。 |
 
 ## CAM++ 已知说话人数诊断上限
 

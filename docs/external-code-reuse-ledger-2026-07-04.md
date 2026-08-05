@@ -1825,7 +1825,7 @@ At the time recorded above, every untracked `src/video_knowledge_pipeline/*.py` 
 | --- | --- | --- | --- |
 | MOSS `TranscriptStreamParser` source-field boundary | `eda4b9f13f1574765a80438c9797780a9bd48112` | **contract pattern adapted / implemented** | 意图：导入已有 `说话人N HH:MM:SS` 逐字稿而不丢 speaker/time；决策：参考 MOSS start/speaker/text 分离边界，直接复用 VKP `parse_timestamp`、`normalise_speaker_value` 与 `TranscriptCue`，只增加窄格式 header 适配；理由：普通文本 fallback 会制造标题/说话人/正文伪段落，重新 diarization 又重复成本；证据：真实用户原始 ASR 与合并 Markdown 均只读解析得到 433 段、2 speakers、0–3529 秒，摘要前言未混入，14 条离线回归通过；生效范围：本地 TXT/Markdown，JSON/SRT/VTT 与普通文本不变。 |
 
-结束时间只由下一 source start 推断；最后一段为 `end_unknown`，时间倒退只标记不重排。导入器逐字保留“根情况来的嘛/送了一外险/活医保/民亚保险”等原始 ASR，正式纠错仍由 human-confirmed 链负责。无模型、网络、上传或敏感正文入库。详细记录：`docs/getbrain-speaker-timeline-import-2026-07-28.md`。
+结束时间只由下一 source start 推断；最后一段为 `end_unknown`，时间倒退只标记不重排。导入器逐字保留原始 ASR 中的四项录音级误识别（公开文档不保留原词），正式纠错仍由 human-confirmed 链负责。无模型、网络、上传或敏感正文入库。详细记录：`docs/getbrain-speaker-timeline-import-2026-07-28.md`。
 
 ## 2026-07-28 pyannote 说话人感知逐字稿评估增量
 
@@ -1906,7 +1906,7 @@ At the time recorded above, every untracked `src/video_knowledge_pipeline/*.py` 
 | --- | --- | --- | --- |
 | FunASR SenseVoice/FSMN-VAD/CT-Punc/CAM++ | release snapshot `16cd165ac3946cc8c08bf845331f91fefec8e1a9` / `1.3.30` | **direct runtime reuse / real GPU trial completed / candidate not promoted** | 意图：用成熟上游原生说话人链生成匿名双人候选；决策：从既有本地 repo 获取 release snapshot，不重复 clone，不复制推理；隔离环境锁定 `1.3.30`，新环境安装器同步固定版本；理由：旧 `1.3.9` 真实复现上游时间戳边界异常，`1.3.30` 已修复相关路径；证据：上游 13/13、真实 CUDA 1/1 chunk，168/168 分段有匿名标签；生效范围：显式 CAM++ 本地候选，不改变 SenseVoice 默认、不自动下载或 fallback。 |
 | VKP speaker 适配 + pyannote.metrics + MeetEval | pyannote `e8000509...` / MeetEval `184ff17e...` | **compatibility bug fixed / quality gate failed closed** | 意图：防止 `spk=0` 丢失并验证说话人时间、文字归属；决策：只把 `None` 视为缺失，贯穿 raw FunASR→normalized JSON→reader，并继续直接调用上游指标；理由：标签齐全不等于分人正确；证据：修复前误报 1 人/75 段，修复后 2 人/168 段；人审来源保真纠正后 DER 0.24396667、cpCER 0.36036036、tcpCER 0.52852853，生产推荐被阻断；生效范围：speaker metadata 与 A/B recommendation，不推断身份、不做外部事实核查、不上传。 |
-| VKP 来源保真纠错 | 当前 canonical human-confirmed engine | **existing module reused / recording-scoped** | 意图：输出还原录音原意；决策：保留“佛医保、送了意外险、根据情况来的嘛、明亚保险”的本录音人工确认决定，保险陈述不做外部事实核查；理由：ASR/总结任务应忠实表达讲话内容而非裁决现实真伪；证据：精确 source SHA 清单和 source-fidelity 回归；生效范围：当前录音，未来录音只生成待复核候选。 |
+| VKP 来源保真纠错 | 当前 canonical human-confirmed engine | **existing module reused / recording-scoped** | 意图：输出还原录音原意；决策：保留四项本录音人工确认决定（公开版以合成纠词 A-D 代替原词），保险陈述不做外部事实核查；理由：ASR/总结任务应忠实表达讲话内容而非裁决现实真伪；证据：精确 source SHA 清单和 source-fidelity 回归；生效范围：当前录音，未来录音只生成待复核候选。 |
 
 ## 2026-07-29 09:32:03 | MOSS 精确同窗 A/B 增量
 
@@ -1923,7 +1923,7 @@ At the time recorded above, every untracked `src/video_knowledge_pipeline/*.py` 
 | 项目 | 固定版本 | 状态 | 意图 / 决策 / 理由 / 证据 / 生效范围 |
 | --- | --- | --- | --- |
 | huggingface/huggingface_hub `scan_cache_dir` | PyPI `0.30.2`; installed RECORD SHA-256 `90C92D5CC14E1E9794832B140F4B5E8F33DC1055A673CEC234F5039222574F90` | **direct library reuse / MOSS readiness hardened** | 意图：避免空目录、断点残片和 Git LFS pointer 被误报为 MOSS 已安装；决策：直接调用成熟缓存扫描器，只补 MOSS 固定源码所需文件与权重分片的适配校验；理由：目录名不是离线可加载证据，也不应新写一套 Hub 缓存遍历器；证据：本地真实扫描 5 个 repo/1 warning/无 MOSS，四项新合同测试、16 项 focused 和 93 passed / 3 optional skipped 关联套件；生效范围：MOSS readiness 元数据，不添加必装依赖、不下载/加载模型、不联网、不推理、不 fallback。 |
-| VKP recording-scoped source fidelity + anonymous speaker contract | 当前工作树 | **existing contract reused / reverified** | 意图：按用户确认还原录音原意并区分讲话人；决策：仅本录音应用“佛医保、送了意外险、根据情况来的嘛、明亚保险”，保留 `说话人1/说话人2`，不判断保险观点的外部真假；理由：来源忠实与事实核查是不同任务；证据：human-confirmed 替换保留 speaker identity、最终 reader 双人标签、总结提示 source-fidelity 回归随关联套件通过；生效范围：当前录音正式决定，其他录音 review-only，不猜身份。 |
+| VKP recording-scoped source fidelity + anonymous speaker contract | 当前工作树 | **existing contract reused / reverified** | 意图：按用户确认还原录音原意并区分讲话人；决策：仅本录音应用四项人工确认决定（公开版以合成纠词 A-D 代替原词），保留 `说话人1/说话人2`，不判断保险观点的外部真假；理由：来源忠实与事实核查是不同任务；证据：human-confirmed 替换保留 speaker identity、最终 reader 双人标签、总结提示 source-fidelity 回归随关联套件通过；生效范围：当前录音正式决定，其他录音 review-only，不猜身份。 |
 
 ## 2026-07-29 11:07:11 | FunASR CAM++ 官方聚类参数诊断
 

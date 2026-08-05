@@ -4,11 +4,11 @@ from video_knowledge_pipeline.final_reading_note import render_final_reading_not
 def test_final_reading_note_combines_summary_then_transcript_without_internal_metadata() -> None:
     note = render_final_reading_note(
         "示例课程",
-        smart_summary_markdown="# 示例课程 - 智能总结\n\n课程讲解了客户沟通的三个原则。\n",
+        smart_summary_markdown="# 示例课程 - 智能总结\n\n课程讲解了项目沟通的三个原则。\n",
         transcript_markdown=(
             "# 示例课程 - 原始转录\n\n"
             "### 00:00:00.000 - 00:00:05.000\n\n"
-            "客户沟通先建立信任。\n"
+            "项目沟通先明确目标。\n"
         ),
         timeline=[{"start": 0, "end": 5}],
     )
@@ -16,8 +16,8 @@ def test_final_reading_note_combines_summary_then_transcript_without_internal_me
     assert note.index("  - 📑 智能总结") < note.index("- 逐字稿")
     assert "    - 录音信息" in note
     assert "约 00:00:05.000" in note
-    assert "课程讲解了客户沟通的三个原则。" in note
-    assert "客户沟通先建立信任。" in note
+    assert "课程讲解了项目沟通的三个原则。" in note
+    assert "项目沟通先明确目标。" in note
     assert "source_arbitrated_transcript" not in note
     assert "arbitrated_or_reviewed" not in note
     assert "处理时间" not in note
@@ -46,8 +46,8 @@ def test_final_reading_note_replaces_operational_summary_placeholder() -> None:
 
 def test_final_reading_note_projects_canonical_summary_without_regenerating_content() -> None:
     note = render_final_reading_note(
-        "一家三口重疾险配置咨询沟通记录",
-        smart_summary_markdown="""# 一家三口重疾险配置咨询沟通记录 - 智能总结
+        "双人项目沟通记录",
+        smart_summary_markdown="""# 双人项目沟通记录 - 智能总结
 
 生成方式：`codex_llm_rewrite_final`。
 > 证据边界：本总结仅依据已入库证据。
@@ -59,7 +59,7 @@ route_revision: abc123
 
 ## 基本信息
 
-- 内容类型：客户沟通
+- 内容类型：项目访谈
 - 处理时间：2026-07-29T17:00:00
 - 来源路径：D:/internal/bundle
 - 章节修订来源：D:/internal/revisions.json
@@ -67,26 +67,26 @@ route_revision: abc123
 
 ## 一句话概览
 
-双方确认了一家三口的重疾险配置方向。
+双方确认了项目交付方向。
 
 ## 核心主题
 
-- 成人与儿童采用不同的身故责任配置。
+- 不同阶段采用不同的交付检查策略。
 - model: 讲者在正文中讨论的模型名称必须保留。
 
 ## 分段总结
 
-### 00:00:00 用户需求
+### 00:00:00 项目需求
 
-用户说明了预算与保额。
+参与者说明了排期与资源。
 
 ## 关键观点
 
-- 先明确保障需求，再比较方案。
+- 先明确交付目标，再比较方案。
 
 ## 可执行动作清单
 
-- 经纪人次日提供对比方案。
+- 项目负责人次日提供对比方案。
 
 ## 高频话术
 
@@ -94,15 +94,15 @@ route_revision: abc123
 
 ## 待复核点
 
-- 一处产品名称需要听音确认。
+- 一处功能名称需要听音确认。
 """,
-        transcript_markdown="# 原始转录\n\n**说话人1**：根据情况来的嘛。\n",
+        transcript_markdown="# 原始转录\n\n**说话人1**：根据排期来的嘛。\n",
         timeline=[{"start": 0, "end": 5}],
-        content_type="客户沟通",
+        content_type="项目访谈",
         participant_count=2,
     )
 
-    assert "双方确认了一家三口的重疾险配置方向。" in note
+    assert "双方确认了项目交付方向。" in note
     assert "讲者在正文中讨论的模型名称必须保留。" in note
     assert "    - 📅 章节概要" in note
     assert "    - ✨ 金句精选" in note
@@ -112,7 +112,7 @@ route_revision: abc123
     assert note.index("    - ✨ 金句精选") < note.index("    - 📋 待办事项")
     assert "- 逐字稿" in note
     assert "  - 🟢 说话人1" in note
-    assert "    - 根据情况来的嘛。" in note
+    assert "    - 根据排期来的嘛。" in note
     assert "collapsed::" not in note
     assert "生成方式" not in note
     assert "证据边界" not in note

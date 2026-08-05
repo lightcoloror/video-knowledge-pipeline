@@ -143,10 +143,10 @@ smoke 产物位于：
 
 本适配不改文字纠错或说话人链。当前既有回归继续保证：
 
-- `根情况来的嘛` → `根据情况来的嘛`
-- `活医保` → `佛医保`
-- `送了一外险` → `送了意外险`
-- `民亚保险` → `明亚保险`
+- `根排期来的嘛` → `根据排期来的嘛`
+- `会义纪要` → `会议纪要`
+- `发了一分材料` → `发了一份材料`
+- `星合系统` → `星河系统`
 
 这些是当前录音的人工作证实，不是全局自动替换规则。未来录音只生成
 review candidate；只有 `human_confirmed` 才正式应用。逐字稿必须继续保留
@@ -172,7 +172,7 @@ review candidate；只有 `human_confirmed` 才正式应用。逐字稿必须继
 | `audio_loudness_recovery_validation.py` | 防止“放大后有声”被直接当成“有人讲话”并自动重跑 ASR | 直接复用固定 `faster-whisper@ed9a06cd89a93e47838f564998a6c09b655d7f43` 的 Silero VAD，通过现有 `silero_vad_candidate.run_silero_vad_candidate` 建立独立语音证据；只有达到最小时长和占比才生成局部重试计划 | FFmpeg 非静音、响度或波形能量都不能区分讲话、音乐、噪声和测试正弦波 | 固定上游 `VadOptions/get_speech_timestamps` 源码已核对；真实 JFK 语音样本得到 11.0 秒语音、ratio 1.0，低电平正弦波得到 `no_speech_detected`；22 项 focused 与 54 项扩展回归通过 | 仅本地 candidate 校验和 retry plan；不执行 ASR、不改逐字稿、不上传、不 fallback |
 | `audio_chunk_manifest.py` | 让局部重试准确绑定原媒体、精确 chunk 和时间偏移 | 在 manifest 中记录父媒体及每个 chunk 的 `bytes + SHA-256`，revision 由稳定 source/strategy/detection/chunk identity 共同计算 | 原 revision 只含路径、大小、mtime 和窗口；内容变化或旧 chunk 重用时约束不够强 | 篡改 revision、父媒体变化、缺 chunk SHA、重绑 chunk SHA 均 fail-closed；真实 manifest 的 recorded/computed revision 一致 | 新生成的 `audio_chunk_manifest.v1`；旧缺哈希 manifest 不能用于低电平候选自动规划，但仍可由原旧流程只读消费 |
 | `audio_loudness_recovery_retry_plan.v1` | 把可恢复语音块安全交给既有目标 ASR 链 | retry plan 固定 candidate SHA、父媒体 SHA、manifest SHA/revision、chunk index、局部/全局语音区间和 offset；显式要求 secondary evidence 与质量门 | 候选音频本身不是 canonical transcript，也不能绕过现有局部 ASR 仲裁 | 真实本地 smoke 产物 `jfk-chunk-validation-v2.json` 为 `targeted_retry_planned`，且 `automatic_execution=false`、`canonical_transcript_modified=false` | 仅规划；后续仍须显式本地 ASR、注册为第二证据并重新跑完整性/质量门 |
-| 原意纠错与 speaker 合同 | 保证恢复链不会改变本录音的人工确认语义或丢失说话人 | 继续使用现有 human-confirmed 纠错与匿名 speaker 合同：`根据情况来的嘛`、`佛医保`、`送了意外险`、`明亚保险`；未来录音只生成 review candidate | 词句修复是当前录音的来源忠实度判断，不是全局词典；说话人归属是对话逐字稿的必需证据 | `test_transcript_speaker_source_fidelity.py` 与最终 reader E2E 在 54 项扩展套件中通过 | 当前录音可正式写回；其他录音不得静默替换。总结只还原录音原意，不做外部事实真假审查 |
+| 原意纠错与 speaker 合同 | 保证恢复链不会改变本录音的人工确认语义或丢失说话人 | 继续使用现有 human-confirmed 纠错与匿名 speaker 合同：`根据排期来的嘛`、`会议纪要`、`发了一份材料`、`星河系统`；未来录音只生成 review candidate | 词句修复是当前录音的来源忠实度判断，不是全局词典；说话人归属是对话逐字稿的必需证据 | `test_transcript_speaker_source_fidelity.py` 与最终 reader E2E 在 54 项扩展套件中通过 | 当前录音可正式写回；其他录音不得静默替换。总结只还原录音原意，不做外部事实真假审查 |
 
 稳定前门：
 

@@ -48,3 +48,40 @@ tmp-*.args.json
 *.credential.xml
 secrets/
 credentials/
+# Public-release local-only owner files
+/cell
+/docs/plans/2026-07-23-parallel-validation-and-batch-closure.md
+/docs/plans/2026-07-24-current-parallel-validation-matrix.md
+/docs/plans/2026-07-30-vkp-production-closure.md
+
+# Additional credentials and authenticated session material
+.envrc
+.netrc
+id_rsa
+id_ed25519
+*.token
+*.secret
+*.session
+cookies*.txt
+cookies*.json
+
+# Model weights and local model caches
+.cache/
+*.onnx
+*.safetensors
+*.gguf
+*.ckpt
+*.pth
+*.pt
+
+# Additional source media and generated reader artifacts
+*.ogg
+*.flac
+*.aac
+*.opus
+raw-asr-output.json
+normalized-transcript.json
+full-transcript.md
+smart-summary*.md
+review-notes.json
+human-key-points.json

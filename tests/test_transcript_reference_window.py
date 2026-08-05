@@ -102,9 +102,9 @@ def test_reference_window_reuses_human_confirmed_correction_engine(
     corrections = tmp_path / "human-corrections.json"
     source.write_text(
         """说话人1 00:00:00
-根情况来的嘛，活医保。
+根排期来的嘛，会义纪要。
 说话人2 00:00:10
-送了一外险。
+发了一分材料。
 """,
         encoding="utf-8",
     )
@@ -119,8 +119,8 @@ def test_reference_window_reuses_human_confirmed_correction_engine(
                         "action": "replace",
                         "apply_scope": "segment",
                         "correction_type": "term",
-                        "original_text": "根情况来的嘛",
-                        "corrected_text": "根据情况来的嘛",
+                        "original_text": "根排期来的嘛",
+                        "corrected_text": "根据排期来的嘛",
                         "human_confirmed": True,
                     },
                     {
@@ -129,8 +129,8 @@ def test_reference_window_reuses_human_confirmed_correction_engine(
                         "action": "replace",
                         "apply_scope": "segment",
                         "correction_type": "term",
-                        "original_text": "活医保",
-                        "corrected_text": "佛医保",
+                        "original_text": "会义纪要",
+                        "corrected_text": "会议纪要",
                         "human_confirmed": True,
                     },
                     {
@@ -139,8 +139,8 @@ def test_reference_window_reuses_human_confirmed_correction_engine(
                         "action": "replace",
                         "apply_scope": "segment",
                         "correction_type": "term",
-                        "original_text": "送了一外险",
-                        "corrected_text": "送了意外险",
+                        "original_text": "发了一分材料",
+                        "corrected_text": "发了一份材料",
                         "human_confirmed": True,
                     },
                 ],
@@ -160,8 +160,8 @@ def test_reference_window_reuses_human_confirmed_correction_engine(
 
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert [row["text"] for row in payload["segments"]] == [
-        "根据情况来的嘛，佛医保。",
-        "送了意外险。",
+        "根据排期来的嘛，会议纪要。",
+        "发了一份材料。",
     ]
     assert [row["speaker"] for row in payload["segments"]] == [
         "说话人1",

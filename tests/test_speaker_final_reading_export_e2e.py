@@ -28,9 +28,9 @@ def test_two_speaker_source_fidelity_reaches_single_reader_document(
         json.dumps(
             {
                 "schema": "lecture_webui_bundle.v1",
-                "title": "一家三口重疾险配置咨询沟通记录",
-                "media_path": "D:/recordings/一家三口重疾险配置咨询沟通记录.ogg",
-                "content_type": "客户沟通",
+                "title": "双人项目沟通记录",
+                "media_path": "D:/recordings/双人项目沟通记录.ogg",
+                "content_type": "项目访谈",
                 "source_arbitrated_transcript_json": (
                     "source-arbitrated-transcript.json"
                 ),
@@ -52,21 +52,21 @@ def test_two_speaker_source_fidelity_reaches_single_reader_document(
                         "id": "seg-1",
                         "start": 0,
                         "end": 4,
-                        "text": "根据情况来的嘛，你们家现在配置了哪些保险？",
+                        "text": "根据排期来的嘛，你们现在有哪些准备？",
                         "speaker": "S01",
                     },
                     {
                         "id": "seg-2",
                         "start": 4,
                         "end": 8,
-                        "text": "目前只有佛医保，还没有配置意外险。",
+                        "text": "目前只有会议纪要，还没有整理行动项。",
                         "speaker": "S02",
                     },
                     {
                         "id": "seg-3",
                         "start": 8,
                         "end": 12,
-                        "text": "后续可以由明亚保险经纪人协助梳理。",
+                        "text": "后续可以由星河系统协助梳理。",
                         "speaker": "S01",
                     },
                 ]
@@ -82,7 +82,7 @@ def test_two_speaker_source_fidelity_reaches_single_reader_document(
                     "index": 1,
                     "start": 0,
                     "end": 12,
-                    "transcript": "一家三口讨论现有保障与后续配置。",
+                    "transcript": "双方讨论现有材料与后续安排。",
                 }
             ],
             ensure_ascii=False,
@@ -100,13 +100,13 @@ def test_two_speaker_source_fidelity_reaches_single_reader_document(
     gate = result["transcript_quality_gate"]
 
     assert note.index("  - 📑 智能总结") < note.index("- 逐字稿")
-    assert "      - **内容类型**：客户沟通" in note
+    assert "      - **内容类型**：项目访谈" in note
     assert "      - **参与人数**：约 2 人" in note
     assert "🟢 说话人1" in note
     assert "🟣 说话人2" in note
-    assert "根据情况来的嘛" in note
-    assert "佛医保" in note
-    assert "明亚保险" in note
+    assert "根据排期来的嘛" in note
+    assert "会议纪要" in note
+    assert "星河系统" in note
     assert "  - 🟢 说话人1 [00:00:00.000]" in note
     assert "  - 🟣 说话人2 [00:00:04.000]" in note
     assert "collapsed::" not in note

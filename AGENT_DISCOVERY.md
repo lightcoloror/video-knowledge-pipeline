@@ -1138,7 +1138,7 @@ The receipt commands consume completed local execution evidence; they never star
 - Reason: a matching directory name proves neither a complete snapshot nor offline loadability; the former name-only check could let a long ASR run reach model loading or implicit-download behavior before failing.
 - Evidence: the real local scanner inspected `%LOCAL_MODEL_ROOT%\huggingface\hub`, found no MOSS snapshot, and reports `ready=false`, `status=unknown_or_not_downloaded`, `network_access=disabled`. Empty snapshots, incomplete indexed shards and Git LFS pointers fail closed; 16 focused tests and the 93-pass / 3-optional-skip associated speaker/source-fidelity suite passed.
 - Effective scope: MOSS readiness metadata only. No package/model install, download, model load, audio inference, network request, role inference, fallback or transcript promotion is performed.
-- Source-fidelity boundary: the recording-scoped human decisions are `根情况来的嘛 → 根据情况来的嘛`, `活医保 → 佛医保`, `送了一外险 → 送了意外险`, and `民亚保险 → 明亚保险`. Final transcript output requires anonymous `说话人1/说话人2`; Smart Summary restores the speakers' meaning and does not adjudicate external insurance truth.
+- Source-fidelity boundary: the recording-scoped human decisions are `根排期来的嘛 → 根据排期来的嘛`, `会义纪要 → 会议纪要`, `发了一分材料 → 发了一份材料`, and `星合系统 → 星河系统`. Final transcript output requires anonymous `说话人1/说话人2`; Smart Summary restores the speakers' meaning and does not adjudicate external insurance truth.
 
 ## 2026-07-29 11:07:11 CAM++ known-speaker-count diagnostic
 

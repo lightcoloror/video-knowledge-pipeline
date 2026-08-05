@@ -754,4 +754,4 @@ All production text, vision, and cloud/local-service ASR model tasks now route t
 Use `run-term-arbitration-model` and `run-bilinote-mind-map-model` for preview-first automatic execution of the two former prompt-only workflows. Provider configuration is runtime-only; network calls still require `--execute`. Native whole-video upload remains deferred in favor of temporal frame groups. See `docs/model-task-gateway.md`.
 ## License
 
-VKP is licensed under the [GNU Affero General Public License v3.0 only](LICENSE) (AGPL-3.0-only). Third-party libraries, model runtimes, source-review checkouts, and optional services retain their own licenses and notices.
+VKP is licensed under the [GNU Affero General Public License v3.0 only](LICENSE) (`AGPL-3.0-only`). Third-party libraries, browser assets, model runtimes, datasets, source-review checkouts, and optional services retain their own licenses and notices; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Security issues and sensitive-data handling are covered by [SECURITY.md](SECURITY.md).

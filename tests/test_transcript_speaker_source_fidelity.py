@@ -38,9 +38,9 @@ def test_json_and_moss_normalization_preserve_speaker_contract(tmp_path: Path) -
                 "id": "seg-1",
                 "start": 0,
                 "end": 1,
-                "text": "根据情况来的嘛",
+                "text": "根据排期来的嘛",
                 "speaker": "S01",
-                "speaker_role": "经纪人",
+                "speaker_role": "主持人",
             },
             {
                 "id": "seg-2",
@@ -61,10 +61,10 @@ def test_json_and_moss_normalization_preserve_speaker_contract(tmp_path: Path) -
     cues = parse_transcript(result["json_path"])
 
     assert payload["segments"][0]["speaker"] == "S01"
-    assert payload["segments"][0]["speaker_label"] == "经纪人（说话人1）"
+    assert payload["segments"][0]["speaker_label"] == "主持人（说话人1）"
     assert payload["segments"][1]["speaker_label"] == "说话人2"
     assert cues[0].speaker == "S01"
-    assert cues[0].speaker_role == "经纪人"
+    assert cues[0].speaker_role == "主持人"
     assert cues[1].speaker == "S02"
 
 
@@ -264,14 +264,14 @@ def test_human_confirmed_source_corrections_keep_speaker_identity() -> None:
     cue = TranscriptCue(
         start=0,
         end=5,
-        text="根情况来的嘛，活医保，送了一外险，民亚保险。",
+        text="根排期来的嘛，会义纪要，发了一分材料，星合系统。",
         speaker="S01",
     )
     pairs = [
-        ("根情况来的嘛", "根据情况来的嘛"),
-        ("活医保", "佛医保"),
-        ("送了一外险", "送了意外险"),
-        ("民亚保险", "明亚保险"),
+        ("根排期来的嘛", "根据排期来的嘛"),
+        ("会义纪要", "会议纪要"),
+        ("发了一分材料", "发了一份材料"),
+        ("星合系统", "星河系统"),
     ]
     decisions = [
         {
@@ -290,13 +290,13 @@ def test_human_confirmed_source_corrections_keep_speaker_identity() -> None:
 
     segments, applied = _apply_decisions_to_cues([cue], decisions)
 
-    assert segments[0]["text"] == "根据情况来的嘛，佛医保，送了意外险，明亚保险。"
+    assert segments[0]["text"] == "根据排期来的嘛，会议纪要，发了一份材料，星河系统。"
     assert segments[0]["speaker"] == "S01"
     assert segments[0]["speaker_label"] == "说话人1"
     assert len(applied) == 4
     for original, _corrected in pairs:
-        assert original in DOMAIN_SEMANTIC_REVIEW_ONLY_VARIANTS
-        assert _domain_semantic_suspect_matches(original)
+        assert original not in DOMAIN_SEMANTIC_REVIEW_ONLY_VARIANTS
+        assert not _domain_semantic_suspect_matches(original)
 
 
 def test_summary_prompts_define_source_fidelity_not_world_fact_judgment(

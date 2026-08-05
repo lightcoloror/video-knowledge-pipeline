@@ -12,17 +12,17 @@ def test_getbrain_speaker_timeline_preserves_speaker_time_and_raw_text(
     source.write_text(
         "\n".join(
             [
-                "一家三口重疾险配置咨询沟通记录",
+                "双人项目沟通记录",
                 "",
                 "说话人1 00:00:00",
-                "根情况来的嘛你们家现在有配有哪些保险？",
+                "根排期来的嘛你们现在有哪些准备？",
                 "",
                 "说话人2 00:00:05",
-                "什么没有什么都没有。",
+                "目前还没有准备。",
                 "",
                 "说话人1 00:00:07",
-                "就是那天医院搞了个活动，",
-                "然后给你送了一外险。",
+                "就是那天下午开了个会，",
+                "然后给你发了一分材料。",
             ]
         ),
         encoding="utf-8",
@@ -37,8 +37,8 @@ def test_getbrain_speaker_timeline_preserves_speaker_time_and_raw_text(
         (5.0, 7.0),
         (7.0, 7.0),
     ]
-    assert cues[0].text == "根情况来的嘛你们家现在有配有哪些保险？"
-    assert cues[2].text == "就是那天医院搞了个活动， 然后给你送了一外险。"
+    assert cues[0].text == "根排期来的嘛你们现在有哪些准备？"
+    assert cues[2].text == "就是那天下午开了个会， 然后给你发了一分材料。"
     assert cues[0].segment_id == "segment-000001"
     assert cues[0].source_segment_ids == ["segment-000001"]
     assert cues[0].metadata["end_inferred_from_next_start"] is True
@@ -55,13 +55,13 @@ def test_getbrain_parser_does_not_apply_unconfirmed_term_corrections(
                 "# 摘要标题不会进入逐字稿",
                 "",
                 "说话人2 00:03:07",
-                "医疗险我就活医保啊。",
+                "记录我就会义纪要啊。",
                 "",
                 "说话人1 00:03:09",
-                "医保是活医保。",
+                "记录是会义纪要。",
                 "",
                 "说话人1 00:23:40",
-                "民亚保险的产品条款。",
+                "星合系统的操作手册。",
             ]
         ),
         encoding="utf-8",
@@ -70,12 +70,12 @@ def test_getbrain_parser_does_not_apply_unconfirmed_term_corrections(
     cues = parse_transcript(source)
 
     assert [cue.text for cue in cues] == [
-        "医疗险我就活医保啊。",
-        "医保是活医保。",
-        "民亚保险的产品条款。",
+        "记录我就会义纪要啊。",
+        "记录是会义纪要。",
+        "星合系统的操作手册。",
     ]
-    assert all("佛医保" not in cue.text for cue in cues)
-    assert all("明亚保险" not in cue.text for cue in cues)
+    assert all("会议纪要" not in cue.text for cue in cues)
+    assert all("星河系统" not in cue.text for cue in cues)
     assert [cue.speaker for cue in cues] == ["说话人2", "说话人1", "说话人1"]
 
 
