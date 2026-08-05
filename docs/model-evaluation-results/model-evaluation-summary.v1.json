@@ -1,0 +1,95 @@
+{
+  "schema": "video_knowledge_pipeline.model_evaluation_summary.v1",
+  "generated_at": "2026-07-18T20:16:26+08:00",
+  "generated_by": "Codex (GPT-5)",
+  "evidence_status": "real_call_human_reviewed_candidate_evidence",
+  "safe_to_publish_private_repo": true,
+  "contains_credentials": false,
+  "contains_absolute_local_paths": false,
+  "contains_raw_provider_responses": false,
+  "contains_reasoning_content": false,
+  "runs": [
+    {
+      "id": "free_trial_task_fit_20260717",
+      "attempted": 27,
+      "completed": 24,
+      "failed": 3,
+      "retries": 0,
+      "fallbacks": 0,
+      "provider_reported_cost": null,
+      "provisional_task_choices": {
+        "asr_zh_short": "groq/whisper-large-v3-turbo",
+        "ocr_clear_ppt": "mistral/ocr-4.0",
+        "ppt_layout_vision": "siliconflow/zai-org/GLM-4.5V",
+        "semantic_frame": "google/gemini-flash",
+        "temporal_two_frame": "google/gemini-flash",
+        "evidence_extraction": "google/gemini-flash",
+        "smart_summary": "google/gemini-flash",
+        "transcript_correction": "google/gemini-flash"
+      },
+      "known_failures": {
+        "http_429": 3,
+        "groq_qwen36_structured_tasks_with_think_leak": 6,
+        "temporal_latency_unavailable": 3
+      },
+      "report": "2026-07-17-free-trial-task-fit.md"
+    },
+    {
+      "id": "volcengine_coding_plan_stage_b_20260717",
+      "attempted": 43,
+      "completed": 43,
+      "failed": 0,
+      "retries": 0,
+      "fallbacks": 0,
+      "provider_reported_cost": null,
+      "quality_winners": {
+        "vision_chat_ocr": "minimax-m3",
+        "semantic_frame": "kimi-k2.6",
+        "temporal_two_frame": "doubao-seed-2.0-pro",
+        "evidence_summary": [
+          "doubao-seed-2.0-pro",
+          "deepseek-v4-pro"
+        ],
+        "transcript_correction": "kimi-k2.7-code"
+      },
+      "recommended_without_doubao": {
+        "vision_chat_ocr": "minimax-m3",
+        "semantic_frame": "kimi-k2.6",
+        "temporal_two_frame": "kimi-k2.7-code",
+        "evidence_summary": "deepseek-v4-pro",
+        "transcript_correction": "kimi-k2.7-code"
+      },
+      "known_failures": {
+        "semantic_frame_schema_invalid": 2,
+        "temporal_quality_miss": 1,
+        "temporal_latency_unavailable": 7
+      },
+      "report": "2026-07-17-volcengine-stage-b.md"
+    },
+    {
+      "id": "ark_siliconflow_capability_ceiling_20260718",
+      "attempted": 10,
+      "valid_content": 8,
+      "failed": 2,
+      "comparable_pairs": 3,
+      "retries": 0,
+      "fallbacks": 0,
+      "provider_reported_cost": null,
+      "pair_findings": {
+        "deepseek_v4_pro": "siliconflow_higher_content_quality_but_much_slower",
+        "deepseek_v4_flash": "ark_only_valid_result_and_fastest_correct_result",
+        "glm_5_2": "siliconflow_returned_content_ark_exhausted_reasoning_without_final_content",
+        "kimi_k2_7": "siliconflow_faster_and_higher_scoring",
+        "kimi_k2_6": "equal_automatic_quality_ark_much_faster"
+      },
+      "report": "../coding-plan-siliconflow-native-parity-2026-07-18.md"
+    }
+  ],
+  "global_limitations": [
+    "single fixed samples are screening evidence, not production proof",
+    "http success is not a task quality pass",
+    "unknown provider cost must remain unknown",
+    "model or route changes require a new evaluation and a new consent for real calls",
+    "no production route was changed automatically"
+  ]
+}

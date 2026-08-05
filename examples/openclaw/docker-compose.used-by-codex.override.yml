@@ -1,0 +1,19 @@
+services:
+  openclaw-gateway:
+    environment:
+      VKP_API_BASE: http://host.docker.internal:8931
+      VDO_API_BASE: http://host.docker.internal:8921
+      VKP_CONTAINER_ROOT: /mnt/used-by-codex
+      VKP_HOST_ROOT: ${VKP_HOST_ROOT}
+    volumes:
+      - ${VKP_HOST_ROOT}:/mnt/used-by-codex
+
+  openclaw-cli:
+    environment:
+      VKP_API_BASE: http://host.docker.internal:8931
+      VDO_API_BASE: http://host.docker.internal:8921
+      VKP_CONTAINER_ROOT: /mnt/used-by-codex
+      VKP_HOST_ROOT: ${VKP_HOST_ROOT}
+    volumes:
+      - ${VKP_HOST_ROOT}:/mnt/used-by-codex
+

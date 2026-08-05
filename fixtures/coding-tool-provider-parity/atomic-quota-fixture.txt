@@ -1,0 +1,46 @@
+FILE: atomic_quota.py
+
+import sqlite3
+from pathlib import Path
+
+
+def reserve_quota(db_path: Path, user_id: str, limit: int) -> bool:
+    """Reserve one quota unit and return whether the reservation succeeded."""
+    conn = sqlite3.connect(db_path, timeout=5)
+    try:
+        row = conn.execute(
+            "SELECT used FROM quotas WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+        used = int(row[0]) if row else 0
+        if used >= limit:
+            return False
+        if row:
+            conn.execute(
+                "UPDATE quotas SET used = ? WHERE user_id = ?",
+                (used + 1, user_id),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO quotas(user_id, used) VALUES (?, 1)",
+                (user_id,),
+            )
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+
+
+SCHEMA = """
+CREATE TABLE quotas (
+    user_id TEXT PRIMARY KEY,
+    used INTEGER NOT NULL CHECK (used >= 0)
+)
+"""
+
+REQUIREMENTS:
+- Multiple processes may call reserve_quota concurrently through independent SQLite connections.
+- At most `limit` calls for one user may return True.
+- Keep the public function signature and the database schema unchanged.
+- Do not solve the race with a process-local Python lock.
+- Failed and rejected reservations must not leave an open transaction.

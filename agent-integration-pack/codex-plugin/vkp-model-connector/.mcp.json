@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "vkp-trusted-model-connector": {
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "D:\\used-by-codex\\video-knowledge-pipeline\\scripts\\start-trusted-model-connector-with-env.ps1"
+      ],
+      "cwd": "D:\\used-by-codex\\video-knowledge-pipeline"
+    }
+  }
+}

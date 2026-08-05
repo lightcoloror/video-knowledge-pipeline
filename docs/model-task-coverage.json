@@ -1,0 +1,347 @@
+{
+  "schema": "video_knowledge_pipeline.model_task_coverage.v1",
+  "status": "complete",
+  "counts": {
+    "total": 15,
+    "unified": 14,
+    "legacy_adapter": 0,
+    "deferred": 1,
+    "contract_drift": 0,
+    "with_online_adapter": 14
+  },
+  "rows": [
+    {
+      "task": "cloud_asr",
+      "model_type": "asr",
+      "modality": "audio",
+      "module": "cloud_asr",
+      "gateway": "model_task_gateway",
+      "execution": "online",
+      "migration_status": "unified",
+      "declared_migration_status": "unified",
+      "implementation": {
+        "module_imported": true,
+        "uses_model_task_gateway": true,
+        "source_module": "cloud_asr"
+      },
+      "providers": [
+        "litellm",
+        "openai_compatible_asr"
+      ],
+      "online_api_adapter": true,
+      "needs_migration": false,
+      "deferred": false
+    },
+    {
+      "task": "local_asr_service",
+      "model_type": "asr",
+      "modality": "audio",
+      "module": "local_asr_service_adapter",
+      "gateway": "model_task_gateway",
+      "execution": "local_http_or_explicit_remote",
+      "migration_status": "unified",
+      "declared_migration_status": "unified",
+      "implementation": {
+        "module_imported": true,
+        "uses_model_task_gateway": true,
+        "source_module": "local_asr_service_adapter"
+      },
+      "providers": [
+        "speaches_openai_compatible",
+        "custom_openai_compatible_asr"
+      ],
+      "online_api_adapter": true,
+      "needs_migration": false,
+      "deferred": false
+    },
+    {
+      "task": "multimodal_frame_analysis",
+      "model_type": "semantic_frame",
+      "modality": "image",
+      "module": "multimodal_frame_analyzer",
+      "gateway": "model_task_gateway",
+      "execution": "online_or_local_http",
+      "migration_status": "unified",
+      "declared_migration_status": "unified",
+      "implementation": {
+        "module_imported": true,
+        "uses_model_task_gateway": true,
+        "source_module": "multimodal_frame_analyzer"
+      },
+      "providers": [
+        "litellm",
+        "gemini",
+        "openai_compatible",
+        "local_qwen_vl"
+      ],
+      "online_api_adapter": true,
+      "needs_migration": false,
+      "deferred": false
+    },
+    {
+      "task": "temporal_visual_analysis",
+      "model_type": "temporal_sequence",
+      "modality": "multi_image",
+      "module": "temporal_visual_analyzer",
+      "gateway": "model_task_gateway",
+      "execution": "online_or_local_http",
+      "migration_status": "unified",
+      "declared_migration_status": "unified",
+      "implementation": {
+        "module_imported": true,
+        "uses_model_task_gateway": true,
+        "source_module": "temporal_visual_analyzer"
+      },
+      "providers": [
+        "litellm",
+        "gemini",
+        "openai_compatible",
+        "local_qwen_vl"
+      ],
+      "online_api_adapter": true,
+      "needs_migration": false,
+      "deferred": false
+    },
+    {
+      "task": "smart_summary_rewrite",
+      "model_type": "summary_rewrite",
+      "modality": "text",
+      "module": "smart_summary_codex",
+      "gateway": "model_task_gateway",
+      "execution": "online_or_agent_import",
+      "migration_status": "unified",
+      "declared_migration_status": "unified",
+      "implementation": {
+        "module_imported": true,
+        "uses_model_task_gateway": true,
+        "source_module": "smart_summary_codex"
+      },
+      "providers": [
+        "litellm",
+        "openai_compatible"
+      ],
+      "online_api_adapter": true,
+      "needs_migration": false,
+      "deferred": false
+    },
+    {
+      "task": "smart_summary_section_rewrite",
+      "model_type": "summary_rewrite",
+      "modality": "text",
+      "module": "smart_summary_section_llm",
+      "gateway": "model_task_gateway",
+      "execution": "online",
+      "migration_status": "unified",
+      "declared_migration_status": "unified",
+      "implementation": {
+        "module_imported": true,
+        "uses_model_task_gateway": true,
+        "source_module": "smart_summary_section_llm"
+      },
+      "providers": [
+        "litellm",
+        "openai_compatible"
+      ],
+      "online_api_adapter": true,
+      "needs_migration": false,
+      "deferred": false
+    },
+    {
+      "task": "smart_summary_global_reduce",
+      "model_type": "summary_rewrite",
+      "modality": "text",
+      "module": "smart_summary_global_reduce",
+      "gateway": "model_task_gateway",
+      "execution": "online",
+      "migration_status": "unified",
+      "declared_migration_status": "unified",
+      "implementation": {
+        "module_imported": true,
+        "uses_model_task_gateway": true,
+        "source_module": "smart_summary_global_reduce"
+      },
+      "providers": [
+        "litellm",
+        "openai_compatible"
+      ],
+      "online_api_adapter": true,
+      "needs_migration": false,
+      "deferred": false
+    },
+    {
+      "task": "transcript_readable_polish",
+      "model_type": "text_llm",
+      "modality": "text",
+      "module": "transcript_readable_llm",
+      "gateway": "model_task_gateway",
+      "execution": "online_or_agent_substitute",
+      "migration_status": "unified",
+      "declared_migration_status": "unified",
+      "implementation": {
+        "module_imported": true,
+        "uses_model_task_gateway": true,
+        "source_module": "transcript_readable_llm"
+      },
+      "providers": [
+        "litellm",
+        "openai_compatible"
+      ],
+      "online_api_adapter": true,
+      "needs_migration": false,
+      "deferred": false
+    },
+    {
+      "task": "transcript_correction_pack",
+      "model_type": "transcript_correction",
+      "modality": "text",
+      "module": "transcript_correction_pack",
+      "gateway": "model_task_gateway",
+      "execution": "online_or_import",
+      "migration_status": "unified",
+      "declared_migration_status": "unified",
+      "implementation": {
+        "module_imported": true,
+        "uses_model_task_gateway": true,
+        "source_module": "transcript_correction_pack"
+      },
+      "providers": [
+        "litellm",
+        "openai_compatible"
+      ],
+      "online_api_adapter": true,
+      "needs_migration": false,
+      "deferred": false
+    },
+    {
+      "task": "transcript_candidate_discovery",
+      "model_type": "transcript_correction",
+      "modality": "text",
+      "module": "transcript_semantic_correction",
+      "gateway": "model_task_gateway",
+      "execution": "online_or_agent_substitute",
+      "migration_status": "unified",
+      "declared_migration_status": "unified",
+      "implementation": {
+        "module_imported": true,
+        "uses_model_task_gateway": true,
+        "source_module": "transcript_semantic_correction"
+      },
+      "providers": [
+        "litellm",
+        "openai_compatible"
+      ],
+      "online_api_adapter": true,
+      "needs_migration": false,
+      "deferred": false
+    },
+    {
+      "task": "transcript_semantic_correction",
+      "model_type": "transcript_correction",
+      "modality": "text",
+      "module": "transcript_semantic_correction",
+      "gateway": "model_task_gateway",
+      "execution": "online_or_agent_substitute",
+      "migration_status": "unified",
+      "declared_migration_status": "unified",
+      "implementation": {
+        "module_imported": true,
+        "uses_model_task_gateway": true,
+        "source_module": "transcript_semantic_correction"
+      },
+      "providers": [
+        "litellm",
+        "openai_compatible"
+      ],
+      "online_api_adapter": true,
+      "needs_migration": false,
+      "deferred": false
+    },
+    {
+      "task": "term_arbitration",
+      "model_type": "transcript_correction",
+      "modality": "text",
+      "module": "model_task_automation",
+      "gateway": "model_task_gateway",
+      "execution": "online_or_import",
+      "migration_status": "unified",
+      "declared_migration_status": "unified",
+      "implementation": {
+        "module_imported": true,
+        "uses_model_task_gateway": true,
+        "source_module": "model_task_automation"
+      },
+      "providers": [
+        "litellm",
+        "openai_compatible"
+      ],
+      "online_api_adapter": true,
+      "needs_migration": false,
+      "deferred": false
+    },
+    {
+      "task": "bilinote_mind_map",
+      "model_type": "text_llm",
+      "modality": "text",
+      "module": "model_task_automation",
+      "gateway": "model_task_gateway",
+      "execution": "online_or_prompt_import",
+      "migration_status": "unified",
+      "declared_migration_status": "unified",
+      "implementation": {
+        "module_imported": true,
+        "uses_model_task_gateway": true,
+        "source_module": "model_task_automation"
+      },
+      "providers": [
+        "litellm",
+        "openai_compatible"
+      ],
+      "online_api_adapter": true,
+      "needs_migration": false,
+      "deferred": false
+    },
+    {
+      "task": "provider_task_benchmark",
+      "model_type": "text_llm",
+      "modality": "text",
+      "module": "volcengine_model_task_matrix",
+      "gateway": "model_task_gateway",
+      "execution": "online_benchmark",
+      "migration_status": "unified",
+      "declared_migration_status": "unified",
+      "implementation": {
+        "module_imported": true,
+        "uses_model_task_gateway": true,
+        "source_module": "volcengine_model_task_matrix"
+      },
+      "providers": [
+        "litellm",
+        "openai_compatible"
+      ],
+      "online_api_adapter": true,
+      "needs_migration": false,
+      "deferred": false
+    },
+    {
+      "task": "native_video_segment",
+      "model_type": "video_segment",
+      "modality": "video",
+      "module": "online_model_gateway",
+      "gateway": "online_model_gateway",
+      "execution": "deferred_use_frame_groups",
+      "migration_status": "deferred",
+      "declared_migration_status": "deferred",
+      "implementation": {
+        "module_imported": true,
+        "uses_model_task_gateway": false,
+        "source_module": "online_model_gateway"
+      },
+      "providers": [],
+      "online_api_adapter": false,
+      "needs_migration": false,
+      "deferred": true
+    }
+  ],
+  "deferred_policy": "Native whole-video API is deferred; temporal frame groups remain the production path.",
+  "updated_at": "2026-07-14T00:13:04"
+}

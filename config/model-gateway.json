@@ -1,0 +1,9 @@
+{
+  "schema": "video_knowledge_pipeline.model_gateway_config.v1",
+  "host": "127.0.0.1",
+  "port": 18776,
+  "telemetry": false,
+  "config_path": ".local/litellm-config.yaml",
+  "pid_path": ".local/model-gateway.pid",
+  "log_path": ".local/model-gateway.log"
+}

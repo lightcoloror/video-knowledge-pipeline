@@ -1,0 +1,23 @@
+{
+  "name": "vkp-model-connector",
+  "version": "0.1.0",
+  "description": "Consent-gated connector for VKP text, vision, and ASR model APIs",
+  "author": {
+    "name": "Local developer"
+  },
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "VKP Model Connector",
+    "shortDescription": "Run approved text, vision, and ASR model tasks.",
+    "longDescription": "Exposes a narrow VKP MCP service that can inspect and execute human-created, hash-locked online-model consents. It never stores API keys and cannot create or confirm consent.",
+    "developerName": "Local developer",
+    "category": "Productivity",
+    "capabilities": ["Read", "Write"],
+    "defaultPrompt": [
+      "Check a VKP model consent without sending data.",
+      "Run the approved VKP model task and report its artifact.",
+      "List the connector's supported text, vision, and ASR tasks."
+    ]
+  }
+}

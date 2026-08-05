@@ -1,0 +1,107 @@
+{
+  "schema": "video_knowledge_pipeline.ram_plus_gpu_smoke.v1",
+  "recorded_at": "2026-07-18T21:07:55+08:00",
+  "recorded_by": "Codex (GPT-5)",
+  "decision": {
+    "selected_model": "ram_plus_swin_large_14m",
+    "implementation": "recognize_anything_ram_plus",
+    "threshold_floor": 0.75,
+    "status": "accepted_for_candidate_evidence",
+    "candidate_only": true,
+    "human_review_required": true,
+    "automatic_remote_fallback": false
+  },
+  "source": {
+    "repo_url": "https://github.com/xinyu1205/recognize-anything",
+    "commit": "7cb804a8609e9f4b1a50b7f31436d2df40bb9481",
+    "mirror_front_door": "https://ghfast.top/",
+    "source_archive_sha256": "d576b201ab22f2b0feb805911e7a95766ac4651faa26374356198e5f9d556e9e",
+    "license": "Apache-2.0"
+  },
+  "checkpoint": {
+    "official_repository": "xinyu1205/recognize-anything-plus-model",
+    "mirror_front_door": "https://hf-mirror.com/",
+    "path": "%LOCAL_MODEL_ROOT%\\models\\recognize-anything\\ram_plus_swin_large_14m.pth",
+    "bytes": 3010210801,
+    "sha256": "497c178836ba66698ca226c7895317e6e800034be986452dbd2593298d50e87d"
+  },
+  "tokenizer": {
+    "repository": "google-bert/bert-base-uncased",
+    "path": "%LOCAL_MODEL_ROOT%\\models\\bert-base-uncased-tokenizer",
+    "files": {
+      "config.json": "7160e1553ad2ca51d8c1cb066be533db31826e12d173824c1bb0cb1a4f187d20",
+      "tokenizer.json": "ce64fce797c24f68df90b40a3f74f579b336a493db14bd583fd520ea0d8c9a98",
+      "tokenizer_config.json": "a025160ef0431f1a392f6f050c1310f4c5d9fb6f275932dbccba73c4d214bf10",
+      "vocab.txt": "07eced375cec144d27c900241f3e339478dec958f92fddbc551f295c992038a3"
+    }
+  },
+  "runtime": {
+    "device": "NVIDIA GeForce RTX 5070 Ti Laptop GPU",
+    "torch": "2.11.0+cu128",
+    "cuda_runtime": "12.8",
+    "transformers": "4.35.2",
+    "tokenizers": "0.15.2",
+    "timm": "0.9.16",
+    "fairscale": "0.4.13",
+    "load_seconds": 3.631,
+    "peak_vram_bytes": 1995930624
+  },
+  "quality_samples": [
+    {
+      "kind": "ppt_office_stock_image",
+      "artifact_sha256": "145e2624249c68e5975bdde47df4b0c4cdcf419faa767473b50b2382beeff42a",
+      "latency_seconds": 0.2889,
+      "tags_en": ["calculator", "computer", "keyboard", "table", "hand", "person"],
+      "tags_zh": ["计算器", "电脑", "键盘", "桌子/表格", "手", "人"]
+    },
+    {
+      "kind": "course_real_world_frame",
+      "artifact_sha256": "bd2d95a4d8d2f883e49a96781398627f2f4c1fcc49f314ec9c330ab9710cfa66",
+      "latency_seconds": 0.0444,
+      "tags_en": ["person", "man", "poster", "sign", "stand", "text", "writing"],
+      "tags_zh": ["人", "男人", "海报", "标志", "站/矗立/摊位", "文本", "手写/字迹"]
+    },
+    {
+      "kind": "synthetic_graphic_frame",
+      "artifact_sha256": "eef2d1974a533cfdd1faa731a1f5a5a50d45e52888c083c56f04f7188f375478",
+      "latency_seconds": 0.0463,
+      "tags_en": ["line", "text"],
+      "tags_zh": ["线条", "文本"]
+    },
+    {
+      "kind": "synthetic_slide_frame",
+      "artifact_sha256": "f9e7097fc372cf60602d284e2b6e297ca8fe7769463c2255b9b40c9348eacf85",
+      "latency_seconds": 0.0455,
+      "tags_en": ["line", "text"],
+      "tags_zh": ["线条", "文本"]
+    }
+  ],
+  "vkp_front_door_smoke": {
+    "bundle": "openclaw-runs/knowledge/tiktok-crossborder-day2/webui-bundle",
+    "frames": 3,
+    "status": "completed",
+    "annotation_count": 3,
+    "write": false,
+    "import_annotations": false,
+    "remote_calls_made": 0,
+    "timeline_contracts_verified": [
+      "frame_paths",
+      "evidence_frame_paths",
+      "integrated_visual.evidence_frame_paths"
+    ]
+  },
+  "storage": {
+    "deprecated_qinglong_weight_deleted_bytes": 326197340,
+    "deprecated_qinglong_weight_sha256": "b8cef913be4c9e8d93f9f903e74271416502ce0b4b04df0ff1e2f00df488aa03",
+    "source_bytes": 34426009,
+    "isolated_environment_bytes": 177426452,
+    "checkpoint_bytes": 3010210801,
+    "tokenizer_bytes": 698188,
+    "d_drive_free_bytes_after_setup": 23065706496
+  },
+  "limitations": [
+    "RAM++ supplies general image tags, not OCR transcription or whole-video understanding.",
+    "Synthetic graphic samples intentionally produce sparse generic tags.",
+    "Scores are not exposed by the pinned upstream inference helper; the adapter applies a 0.75 minimum class threshold and preserves candidate-only review semantics."
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "schema": "video_knowledge_pipeline.model_api_settings_ui.v1",
+  "host": "127.0.0.1",
+  "port": 8767,
+  "path": "/"
+}
