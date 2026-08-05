@@ -1992,3 +1992,12 @@ At the time recorded above, every untracked `src/video_knowledge_pipeline/*.py` 
 | Chain-of-Density | ACL NewSum 2023 | **design reference only** | 意图：提高有限篇幅中的信息密度；决策：吸收“先找遗漏实体、再压缩表达”的思想；理由：成熟总结应密集但仍可读；证据：论文公开实验；生效范围：目标密度与质量评估。拒绝复制非官方 prompt、固定新闻长度或保存思考过程。 |
 
 详细的六项五字段决策、两条真实 Bundle 前后输入统计、兼容边界和执行方式见 `docs/decisions/2026-08-02-smart-summary-reader-plan-v1.md`。
+
+
+## 2026-08-05 统一多模型网关薄适配
+
+更新时间：2026-08-05 17:40:00 +08:00 | Codex / GPT-5.6
+
+| 上游模块 | 固定版本 | 状态 | 意图 / 决策 / 理由 / 证据 / 生效范围 / 回滚 |
+| --- | --- | --- | --- |
+| lightcoloror/model-provider-gateway | `24d6aafca23c4fa836f25ce19d3a5d428d962354` / AGPL-3.0-only | **public shared control plane / optional VKP adapter implemented** | 意图：让研究、写作、视频生成与 VKP 复用审核 Provider preset、secret 引用、route/consent plan 和 adapter contract；决策：VKP 只增加 optional extra 与精确 profile/route 投影，Provider、Base URL、模型、能力和 options 不完全相同即 fail-closed；理由：不能复制第二套网关状态机或凭 OpenAI-compatible 静默开放任意目的地；证据：共享项目 33/33 双跑、LiteLLM local stub parity、Gitleaks/path scan、GitHub PUBLIC/AGPL 回读，VKP focused 回归；生效范围：配置投影，不读取 secret、不调用 Provider、不改变 VKP Broker/consent/runtime；回滚：移除 optional extra 与薄适配器，原 VKP 网关不变。详细记录：`docs/model-provider-gateway-adapter-2026-08-05.md`。 |

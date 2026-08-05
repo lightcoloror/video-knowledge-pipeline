@@ -12,6 +12,9 @@ core = []
 online = ["litellm[proxy]>=1.81.7,<2"]
 local = ["ruptures==1.1.10"]
 hybrid = ["litellm[proxy]>=1.81.7,<2"]
+shared_gateway = [
+  "model-provider-gateway @ git+https://github.com/lightcoloror/model-provider-gateway.git@24d6aafca23c4fa836f25ce19d3a5d428d962354",
+]
 evaluation = [
   "pyannote-metrics>=4.1,<5",
   "meeteval @ git+https://github.com/fgnt/meeteval.git@184ff17eb77fd6db4aba27a9e303a6a3edb09364",

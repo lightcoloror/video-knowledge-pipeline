@@ -1175,3 +1175,16 @@ The receipt commands consume completed local execution evidence; they never star
 - Effective scope: new global Reduce candidates and final Smart Summary semantic quality. It does not modify Timeline, canonical transcript, chapter fact packs, provider authorization, or existing summaries unless an explicitly authorized call passes every gate.
 - New artifacts: `exports/smart-summary-reader-plan.json`, raw provider response, candidate Markdown, and the existing Reduce report. Legacy Markdown candidates remain explicit compatibility mode only; malformed or unsupported model output fails closed.
 - Detailed record: `docs/decisions/2026-08-02-smart-summary-reader-plan-v1.md`.
+
+
+## 2026-08-05 Shared model-provider-gateway adapter
+
+- Updated: 2026-08-05 17:40:00 +08:00 by Codex / GPT-5.6.
+- Stable module: `video_knowledge_pipeline.model_provider_gateway_adapter`.
+- Optional install: `pip install -e .[shared_gateway]`; the extra pins public AGPL repository `lightcoloror/model-provider-gateway` at `24d6aafca23c4fa836f25ce19d3a5d428d962354`.
+- Intent: share reviewed provider presets and adapter contracts without duplicating VKP's gateway state machine.
+- Decision: export only exact remote proxy profile matches; local, legacy, arbitrary URL, model drift and provider-option drift fail closed. DPAPI values are never read or exported; only `auth_ref` is retained.
+- Reason: OpenAI compatibility is a protocol property, not permission to contact arbitrary destinations.
+- Evidence: shared gateway 33/33 double-run tests, LiteLLM loopback stub parity, Gitleaks/path scan, PUBLIC/AGPL GitHub readback, plus VKP focused adapter regression.
+- Effective scope: optional configuration projection only. VKP Timeline, Bundle, route revision, consent v2, Broker reservation, runtime execution and audit remain authoritative; no provider call or fallback is added.
+- Detailed record: `docs/model-provider-gateway-adapter-2026-08-05.md`.
