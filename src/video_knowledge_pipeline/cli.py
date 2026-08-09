@@ -63,7 +63,12 @@ from .model_business_authorization import (
     validate_model_business_authorization,
 )
 from .trusted_model_connector_policy import TrustedModelConnectorPolicy
-from .creative_contract_bridge import import_generation_contracts, import_previs_candidate
+from .creative_contract_bridge import (
+    build_material_manifest,
+    import_generation_contracts,
+    import_previs_candidate,
+    validate_material_manifest,
+)
 from .evidence_conflict_index import build_evidence_conflict_index
 from .entity_lexicon import build_entity_lexicon
 from .extractor_execution import extractor_run_log, run_extractor_plan
@@ -1831,6 +1836,19 @@ def main(argv: list[str] | None = None) -> int:
             validation_path=args.validation,
             allowed_roots=args.source_root or None,
             write=not args.no_write,
+        )
+    elif args.command == "material-manifest":
+        result = build_material_manifest(
+            args.bundle_dir,
+            transcript_path=args.transcript or None,
+            output_path=args.output or None,
+            write=not args.no_write,
+        )
+    elif args.command == "material-manifest-validate":
+        result = validate_material_manifest(
+            args.bundle_dir,
+            args.manifest_path or None,
+            write_report=args.write_report,
         )
     elif args.command == "multimodal-sample-review":
         result = multimodal_sample_review(
@@ -4321,6 +4339,23 @@ def build_parser() -> argparse.ArgumentParser:
     previs_import.add_argument("--validation", required=True)
     previs_import.add_argument("--source-root", action="append", default=[], help="Allowed local source root; repeat for external contract directories")
     previs_import.add_argument("--no-write", action="store_true")
+
+    material_manifest = sub.add_parser(
+        "material-manifest",
+        help="Project local transcript, keyframes, temporal evidence, and Bundle metadata into material-manifest.v1",
+    )
+    material_manifest.add_argument("bundle_dir")
+    material_manifest.add_argument("--transcript", default="", help="Optional exact transcript path; defaults to VKP canonical transcript selection")
+    material_manifest.add_argument("--output", default="", help="Optional Bundle-local output path; defaults to exports/material-manifest.v1.json")
+    material_manifest.add_argument("--no-write", action="store_true")
+
+    material_validate = sub.add_parser(
+        "material-manifest-validate",
+        help="Validate material-manifest.v1 schema, hashes, source order, local artifacts, and Bundle freshness",
+    )
+    material_validate.add_argument("bundle_dir")
+    material_validate.add_argument("--manifest-path", default="", help="Defaults to exports/material-manifest.v1.json")
+    material_validate.add_argument("--write-report", action="store_true", help="Write exports/material-manifest-validation.json")
 
 
     sample_review = sub.add_parser("multimodal-sample-review", help="Build a static UI for human sampling of multimodal accuracy impact")

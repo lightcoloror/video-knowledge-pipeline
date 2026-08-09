@@ -1186,3 +1186,15 @@ The receipt commands consume completed local execution evidence; they never star
 - Evidence: shared gateway 53/53 double-run tests, text/vision loopback parity, build and redaction/path scans; VKP adapter 10/10 focused tests.
 - Effective scope: optional config/request projection. VKP Timeline, Bundle, route revision, business authorization, consent v2, Broker execution and audit remain authoritative. Shared Wave 1 ASR/OCR remain blocked.
 - Detailed record: `docs/model-provider-gateway-adapter-2026-08-05.md`.
+
+## 2026-08-09 material-manifest.v1 production adapter
+
+- Updated: 2026-08-09 11:25:00 +08:00 by Codex / GPT-5.6 Sol.
+- Stable CLI: `python -m video_knowledge_pipeline.cli material-manifest <bundle>` and `material-manifest-validate <bundle>`.
+- Intent: expose VKP canonical transcript, keyframes, temporal evidence and Bundle metadata through the shared `material-manifest.v1` facade.
+- Decision: reuse `creative_contract_bridge`, canonical transcript selection, artifact hashes, dependency snapshots and atomic writes. The adapter emits Bundle-relative references only and declares source order as `video_temporal_only`.
+- Reason: WCF owns mixed document-node ordering; VKP owns temporal video evidence. A thin reference envelope avoids copying either manifest/state machine and prevents metadata from becoming execution authority.
+- Evidence: positive fixture plus version/hash drift, missing/out-of-range frame, stale Bundle, wrong source order, corrupt input and byte-identical double-run regressions. No Provider, key, upload or service is involved.
+- Effective scope: derived `exports/material-manifest.v1.json` only. It never mutates Timeline/native manifest, embeds transcript text, grants consent/review approval, registers a run, or permits fallback/publishing.
+- Rollback: stop invoking the two CLI commands and remove the adapter/schema; all native Bundle artifacts remain unchanged.
+- Detailed record: `docs/material-manifest-v1-adapter-2026-08-09.md`.

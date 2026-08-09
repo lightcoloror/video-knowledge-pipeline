@@ -35,6 +35,7 @@ video-knowledge-review = "video_knowledge_pipeline.review_http:main"
 
 [tool.setuptools.package-data]
 video_knowledge_pipeline = [
+  "schemas/*.json",
   "static/*.js",
   "static/wavesurfer-7.12.11/*",
 ]

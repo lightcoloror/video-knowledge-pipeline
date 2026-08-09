@@ -1,12 +1,20 @@
 from __future__ import annotations
 
+import json
+import math
+import mimetypes
+import re
 from pathlib import Path
 from typing import Any, Iterable
 
+import jsonschema
+
 from .artifact_freshness import build_dependency_snapshot, canonical_json_sha256
+from .artifact_freshness import validate_dependency_snapshot
 from .artifact_validation import artifact_evidence, normalise_allowed_roots, validated_local_file
 from .models import now_iso
 from .run_artifact_registry import register_bundle_run
+from .smart_summary_input_pack import select_canonical_transcript_path
 from .storage import read_json, write_json
 
 
@@ -20,6 +28,428 @@ PREVIS_CAPTURE_VALIDATION_SCHEMA = "video_creation_pipeline.previs_capture_valid
 
 GENERATION_IMPORT_SCHEMA = "video_knowledge_pipeline.generation_contract_import.v1"
 PREVIS_EVIDENCE_SCHEMA = "video_knowledge_pipeline.previs_candidate_evidence.v1"
+MATERIAL_MANIFEST_SCHEMA = "material-manifest.v1"
+MATERIAL_MANIFEST_SCHEMA_VERSION = "1.0"
+MATERIAL_MANIFEST_NATIVE_CONTRACT = "video_knowledge_pipeline.material_reference.v1"
+MATERIAL_MANIFEST_VALIDATION_SCHEMA = "video_knowledge_pipeline.material_manifest_validation.v1"
+
+
+def build_material_manifest(
+    bundle_dir: str | Path,
+    *,
+    transcript_path: str | Path | None = None,
+    output_path: str | Path | None = None,
+    write: bool = True,
+) -> dict[str, Any]:
+    """Project one VKP Bundle into the shared material-manifest.v1 facade.
+
+    The facade contains only content-addressed local references and video-temporal
+    ordering. It never copies transcript text, invents document-node order, or
+    grants consent/execution authority.
+    """
+
+    root = _bundle_root(bundle_dir)
+    manifest_path = root / "manifest.json"
+    timeline_path = root / "timeline.json"
+    manifest = read_json(manifest_path)
+    timeline = read_json(timeline_path)
+    if not isinstance(manifest, dict):
+        raise ValueError("manifest.json must be a JSON object")
+    if not isinstance(timeline, list):
+        raise ValueError("timeline.json must be a JSON array")
+    if not timeline:
+        raise ValueError("material manifest requires at least one timeline item")
+
+    transcript = _material_transcript_path(root, manifest, transcript_path)
+    timeline_items, frame_paths = _material_timeline_items(root, timeline)
+    if not frame_paths:
+        raise ValueError("material manifest requires at least one local keyframe")
+
+    inputs: list[dict[str, Any]] = [
+        {"role": "bundle_manifest", "path": manifest_path},
+        {"role": "timeline", "path": timeline_path},
+        {"role": "canonical_transcript", "path": transcript},
+    ]
+    inputs.extend(
+        {"role": f"keyframe_{position:06d}", "path": path}
+        for position, path in enumerate(frame_paths, start=1)
+    )
+    dependency_snapshot = build_dependency_snapshot(
+        root,
+        subject="material-manifest.v1",
+        inputs=inputs,
+        producer_schema=MATERIAL_MANIFEST_NATIVE_CONTRACT,
+    )
+    # Creation time is deliberately excluded: identical Bundle inputs must
+    # produce byte-identical manifests on repeated runs.
+    dependency_snapshot.pop("created_at", None)
+
+    identity: dict[str, Any] = {
+        "schema": MATERIAL_MANIFEST_SCHEMA,
+        "schema_version": MATERIAL_MANIFEST_SCHEMA_VERSION,
+        "native_contract": MATERIAL_MANIFEST_NATIVE_CONTRACT,
+        "producer": "video-knowledge-pipeline",
+        "bundle": {
+            "title": str(manifest.get("title") or manifest.get("source_title") or root.name),
+            "native_schema": str(manifest.get("schema") or ""),
+            "manifest": _material_artifact_reference(root, manifest_path, kind="bundle_metadata"),
+            "timeline": _material_artifact_reference(root, timeline_path, kind="time_evidence"),
+            "timeline_item_count": len(timeline_items),
+        },
+        "transcript": {
+            "kind": "transcript",
+            "artifact": _material_artifact_reference(root, transcript, kind="transcript"),
+            "content_embedded": False,
+        },
+        "timeline_items": timeline_items,
+        "dependency_snapshot": dependency_snapshot,
+        "authority_boundary": {
+            "metadata_only": True,
+            "execution_authorized": False,
+            "external_io_performed": False,
+            "grants_provider_consent": False,
+            "grants_review_approval": False,
+            "mutates_timeline": False,
+            "document_node_order_claimed": False,
+            "source_order_semantics": "video_temporal_only",
+        },
+    }
+    manifest_sha256 = canonical_json_sha256(identity)
+    result = {
+        **identity,
+        "manifest_id": f"vkp-material-{manifest_sha256[:20]}",
+        "manifest_sha256": manifest_sha256,
+    }
+    _validate_material_manifest_payload(root, result, require_fresh=True)
+    if write:
+        target = _material_output_path(root, output_path)
+        write_json(target, result)
+    return result
+
+
+def validate_material_manifest(
+    bundle_dir: str | Path,
+    manifest_path: str | Path | None = None,
+    *,
+    write_report: bool = False,
+) -> dict[str, Any]:
+    """Fail closed when a material manifest is invalid, drifted, or stale."""
+
+    root = _bundle_root(bundle_dir)
+    source = _material_output_path(root, manifest_path)
+    payload = read_json(source)
+    if not isinstance(payload, dict):
+        raise ValueError("material manifest must be a JSON object")
+    report = _validate_material_manifest_payload(root, payload, require_fresh=True)
+    if write_report:
+        write_json(root / "exports" / "material-manifest-validation.json", report)
+    return report
+
+
+def _validate_material_manifest_payload(
+    root: Path,
+    payload: dict[str, Any],
+    *,
+    require_fresh: bool,
+) -> dict[str, Any]:
+    schema = _material_manifest_json_schema()
+    try:
+        jsonschema.validate(payload, schema)
+    except jsonschema.ValidationError as exc:
+        raise ValueError(f"material manifest schema validation failed: {exc.message}") from exc
+
+    identity = {
+        key: value
+        for key, value in payload.items()
+        if key not in {"manifest_id", "manifest_sha256"}
+    }
+    expected_hash = canonical_json_sha256(identity)
+    supplied_hash = str(payload.get("manifest_sha256") or "")
+    if supplied_hash != expected_hash:
+        raise ValueError("material manifest hash drift detected")
+    if payload.get("manifest_id") != f"vkp-material-{expected_hash[:20]}":
+        raise ValueError("material manifest id does not bind its exact hash")
+
+    items = payload.get("timeline_items") if isinstance(payload.get("timeline_items"), list) else []
+    bundle = payload.get("bundle") if isinstance(payload.get("bundle"), dict) else {}
+    if int(bundle.get("timeline_item_count") or 0) != len(items):
+        raise ValueError("material manifest timeline item count drift detected")
+    source_orders = [int(row.get("source_order") or 0) for row in items if isinstance(row, dict)]
+    if source_orders != list(range(1, len(items) + 1)):
+        raise ValueError("material manifest source order is invalid")
+    timeline_indexes = [int(row.get("timeline_index") or 0) for row in items if isinstance(row, dict)]
+    if len(timeline_indexes) != len(set(timeline_indexes)):
+        raise ValueError("material manifest timeline indexes must be unique")
+    starts = [int((row.get("time_range") or {}).get("start_ms") or 0) for row in items]
+    if starts != sorted(starts):
+        raise ValueError("material manifest temporal source order is invalid")
+
+    frame_ids: list[str] = []
+    keyframe_count = 0
+    for row in items:
+        for frame in row.get("keyframes") or []:
+            keyframe_count += 1
+            frame_ids.append(str(frame.get("frame_id") or ""))
+            if (frame.get("timestamp_ms") is None) != (frame.get("timing_status") == "range_only"):
+                raise ValueError("material manifest keyframe timing status is inconsistent")
+    if keyframe_count == 0:
+        raise ValueError("material manifest requires at least one keyframe")
+    if not all(frame_ids) or len(frame_ids) != len(set(frame_ids)):
+        raise ValueError("material manifest frame ids must be unique and non-empty")
+
+    snapshot = payload.get("dependency_snapshot")
+    freshness = validate_dependency_snapshot(root, snapshot if isinstance(snapshot, dict) else {})
+    if require_fresh and freshness.get("status") != "fresh":
+        raise ValueError(f"material manifest bundle is not fresh: {freshness.get('status')}")
+
+    artifact_rows = _material_manifest_artifact_rows(payload)
+    artifact_paths = {str(reference.get("path") or "") for _label, reference in artifact_rows}
+    snapshot_paths = {
+        str(row.get("path") or "")
+        for row in (snapshot.get("inputs") or [])
+        if isinstance(row, dict)
+    } if isinstance(snapshot, dict) else set()
+    if artifact_paths != snapshot_paths:
+        raise ValueError("material manifest dependency snapshot does not bind every artifact")
+    for label, reference in artifact_rows:
+        path = _material_reference_path(root, reference, label=label)
+        evidence = artifact_evidence(path)
+        if int(reference.get("bytes") or -1) != int(evidence["bytes"]):
+            raise ValueError(f"{label} byte length drift detected")
+        if str(reference.get("sha256") or "") != str(evidence["sha256"]):
+            raise ValueError(f"{label} hash drift detected")
+
+    for row in items:
+        time_range = row["time_range"]
+        start_ms = int(time_range["start_ms"])
+        end_ms = int(time_range["end_ms"])
+        for frame in row.get("keyframes") or []:
+            timestamp_ms = frame.get("timestamp_ms")
+            if timestamp_ms is not None and not start_ms <= int(timestamp_ms) <= end_ms:
+                raise ValueError("material manifest keyframe timestamp is outside its timeline range")
+
+    return {
+        "schema": MATERIAL_MANIFEST_VALIDATION_SCHEMA,
+        "status": "valid",
+        "passed": True,
+        "manifest_id": payload["manifest_id"],
+        "manifest_sha256": supplied_hash,
+        "freshness": freshness,
+        "timeline_item_count": len(items),
+        "keyframe_count": keyframe_count,
+        "transcript_content_embedded": False,
+        "metadata_authorizes_execution": False,
+    }
+
+
+def _material_transcript_path(
+    root: Path,
+    manifest: dict[str, Any],
+    transcript_path: str | Path | None,
+) -> Path:
+    selected = transcript_path or select_canonical_transcript_path(root, manifest)
+    if not selected:
+        raise FileNotFoundError("material manifest requires a canonical transcript")
+    return _material_bundle_file(root, selected, label="canonical transcript")
+
+
+def _material_timeline_items(
+    root: Path,
+    timeline: list[Any],
+) -> tuple[list[dict[str, Any]], list[Path]]:
+    items: list[dict[str, Any]] = []
+    dependency_frames: list[Path] = []
+    previous_start = -1
+    seen_indexes: set[int] = set()
+    for source_order, raw in enumerate(timeline, start=1):
+        if not isinstance(raw, dict):
+            raise ValueError(f"timeline item {source_order} must be a JSON object")
+        timeline_index = _material_positive_int(raw.get("index"), fallback=source_order)
+        if timeline_index in seen_indexes:
+            raise ValueError("timeline indexes must be unique")
+        seen_indexes.add(timeline_index)
+        start_ms = _material_seconds_to_ms(raw.get("start"), label=f"timeline {timeline_index} start")
+        end_ms = _material_seconds_to_ms(raw.get("end"), label=f"timeline {timeline_index} end")
+        if end_ms < start_ms:
+            raise ValueError(f"timeline {timeline_index} end precedes start")
+        if start_ms < previous_start:
+            raise ValueError("timeline source order must be chronological")
+        previous_start = start_ms
+
+        frame_values = _material_frame_values(raw)
+        keyframes: list[dict[str, Any]] = []
+        for frame_position, value in enumerate(frame_values, start=1):
+            frame_path = _material_bundle_file(
+                root,
+                value,
+                label=f"timeline {timeline_index} keyframe {frame_position}",
+            )
+            timestamp_ms = _material_frame_timestamp_ms(raw, frame_path, frame_position, len(frame_values))
+            if timestamp_ms is not None and not start_ms <= timestamp_ms <= end_ms:
+                raise ValueError(
+                    f"timeline {timeline_index} keyframe timestamp {timestamp_ms}ms is outside {start_ms}-{end_ms}ms"
+                )
+            keyframes.append(
+                {
+                    "frame_id": f"timeline-{timeline_index:06d}-frame-{frame_position:03d}",
+                    "artifact": _material_artifact_reference(root, frame_path, kind="keyframe"),
+                    "timestamp_ms": timestamp_ms,
+                    "timing_status": "exact" if timestamp_ms is not None else "range_only",
+                }
+            )
+            dependency_frames.append(frame_path)
+        keyframes.sort(
+            key=lambda row: (
+                row["timestamp_ms"] is None,
+                int(row["timestamp_ms"] or 0),
+                str((row.get("artifact") or {}).get("path") or ""),
+            )
+        )
+        evidence_ids = [str(value).strip() for value in raw.get("evidence_ids") or [] if str(value).strip()]
+        if not evidence_ids:
+            evidence_ids = [f"timeline:{timeline_index}"]
+        items.append(
+            {
+                "source_order": source_order,
+                "timeline_index": timeline_index,
+                "time_range": {"start_ms": start_ms, "end_ms": end_ms},
+                "evidence_ids": evidence_ids,
+                "keyframes": keyframes,
+            }
+        )
+    unique_frames = list(dict.fromkeys(dependency_frames))
+    return items, unique_frames
+
+
+def _material_frame_values(row: dict[str, Any]) -> list[str]:
+    values: list[str] = []
+    single = str(row.get("frame_path") or "").strip()
+    if single:
+        values.append(single)
+    for key in ("frame_paths", "temporal_frame_paths"):
+        for value in row.get(key) or []:
+            text = str(value or "").strip()
+            if text:
+                values.append(text)
+    for asset in row.get("assets") or []:
+        if not isinstance(asset, dict):
+            continue
+        if str(asset.get("copied") or "").lower() not in {"true", "1"}:
+            continue
+        text = str(asset.get("path") or "").strip()
+        if text:
+            values.append(text)
+    return list(dict.fromkeys(values))
+
+
+def _material_frame_timestamp_ms(
+    row: dict[str, Any],
+    path: Path,
+    position: int,
+    frame_count: int,
+) -> int | None:
+    timestamps = row.get("frame_timestamps_ms")
+    if isinstance(timestamps, list) and position <= len(timestamps):
+        return _material_nonnegative_int(timestamps[position - 1], label="frame timestamp")
+    if isinstance(timestamps, dict):
+        for key in (str(path), path.name, path.as_posix()):
+            if key in timestamps:
+                return _material_nonnegative_int(timestamps[key], label="frame timestamp")
+    if frame_count == 1 and row.get("timestamp_ms") is not None:
+        return _material_nonnegative_int(row.get("timestamp_ms"), label="frame timestamp")
+    match = re.search(r"(?P<timestamp>\d+)ms(?=\.[^.]+$|$)", path.name, flags=re.IGNORECASE)
+    if match:
+        return int(match.group("timestamp"))
+    return None
+
+
+def _material_artifact_reference(root: Path, path: Path, *, kind: str) -> dict[str, Any]:
+    evidence = artifact_evidence(path)
+    return {
+        "kind": kind,
+        "path": path.relative_to(root).as_posix(),
+        "bytes": int(evidence["bytes"]),
+        "sha256": str(evidence["sha256"]),
+        "mime_type": mimetypes.guess_type(path.name)[0] or "application/octet-stream",
+    }
+
+
+def _material_manifest_artifact_rows(payload: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    bundle = payload.get("bundle") if isinstance(payload.get("bundle"), dict) else {}
+    transcript = payload.get("transcript") if isinstance(payload.get("transcript"), dict) else {}
+    rows: list[tuple[str, dict[str, Any]]] = [
+        ("bundle manifest", bundle.get("manifest") or {}),
+        ("timeline", bundle.get("timeline") or {}),
+        ("canonical transcript", transcript.get("artifact") or {}),
+    ]
+    for item in payload.get("timeline_items") or []:
+        for frame in item.get("keyframes") or []:
+            rows.append((f"keyframe {frame.get('frame_id')}", frame.get("artifact") or {}))
+    return rows
+
+
+def _material_reference_path(root: Path, reference: dict[str, Any], *, label: str) -> Path:
+    return _material_bundle_file(root, str(reference.get("path") or ""), label=label)
+
+
+def _material_bundle_file(root: Path, value: str | Path, *, label: str) -> Path:
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        path = root / path
+    return validated_local_file(path, label=label, allowed_roots=(root,))
+
+
+def _material_output_path(root: Path, value: str | Path | None) -> Path:
+    path = Path(value).expanduser() if value else root / "exports" / "material-manifest.v1.json"
+    if not path.is_absolute():
+        path = root / path
+    resolved = path.resolve()
+    if resolved != root and not resolved.is_relative_to(root):
+        raise ValueError(f"material manifest output is outside bundle: {resolved}")
+    return resolved
+
+
+def _material_seconds_to_ms(value: Any, *, label: str) -> int:
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{label} must be numeric seconds") from exc
+    if not math.isfinite(number) or number < 0:
+        raise ValueError(f"{label} must be finite and non-negative")
+    return int(round(number * 1000))
+
+
+def _material_positive_int(value: Any, *, fallback: int) -> int:
+    if value is None or value == "":
+        return fallback
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("timeline index must be a positive integer") from exc
+    if parsed <= 0:
+        raise ValueError("timeline index must be a positive integer")
+    return parsed
+
+
+def _material_nonnegative_int(value: Any, *, label: str) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{label} must be a non-negative integer") from exc
+    if parsed < 0:
+        raise ValueError(f"{label} must be a non-negative integer")
+    return parsed
+
+
+def _material_manifest_json_schema() -> dict[str, Any]:
+    path = Path(__file__).parent / "schemas" / "material-manifest.v1.schema.json"
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"material manifest schema is unavailable: {path}") from exc
+    if not isinstance(value, dict):
+        raise RuntimeError("material manifest schema must be a JSON object")
+    return value
 
 
 def import_generation_contracts(

@@ -7,9 +7,12 @@ from pathlib import Path
 import pytest
 
 from video_knowledge_pipeline.artifact_freshness import canonical_json_sha256
+from video_knowledge_pipeline.cli import main as cli_main
 from video_knowledge_pipeline.creative_contract_bridge import (
+    build_material_manifest,
     import_generation_contracts,
     import_previs_candidate,
+    validate_material_manifest,
 )
 from video_knowledge_pipeline.storage import read_json, write_json
 
@@ -260,3 +263,134 @@ def test_previs_import_rejects_camera_metadata_drift(tmp_path: Path) -> None:
             validation_path=validation,
             write=False,
         )
+
+
+_MATERIAL_FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "material_manifest"
+
+
+def _material_bundle(tmp_path: Path) -> Path:
+    fixture = read_json(_MATERIAL_FIXTURE_ROOT / "positive" / "synthetic-bundle.v1.json")
+    root = tmp_path / "material-bundle"
+    for row in fixture["files"]:
+        path = root / row["path"]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if "json" in row:
+            write_json(path, row["json"])
+        else:
+            path.write_text(row["text"], encoding="utf-8")
+    return root
+
+
+def _rehash_material_manifest(payload: dict[str, object]) -> None:
+    identity = {
+        key: value
+        for key, value in payload.items()
+        if key not in {"manifest_id", "manifest_sha256"}
+    }
+    digest = canonical_json_sha256(identity)
+    payload["manifest_sha256"] = digest
+    payload["manifest_id"] = f"vkp-material-{digest[:20]}"
+
+
+def test_material_manifest_maps_only_local_content_addressed_references(tmp_path: Path) -> None:
+    root = _material_bundle(tmp_path)
+
+    result = build_material_manifest(root)
+    validation = validate_material_manifest(root)
+
+    assert result["schema"] == "material-manifest.v1"
+    assert result["schema_version"] == "1.0"
+    assert result["bundle"]["timeline_item_count"] == 2
+    assert validation["keyframe_count"] == 2
+    assert validation["freshness"]["status"] == "fresh"
+    assert result["transcript"]["content_embedded"] is False
+    assert result["authority_boundary"]["execution_authorized"] is False
+    assert result["authority_boundary"]["grants_provider_consent"] is False
+    assert result["authority_boundary"]["document_node_order_claimed"] is False
+    assert "Synthetic transcript content" not in json.dumps(result, ensure_ascii=False)
+    assert all(not Path(ref["path"]).is_absolute() for ref in (
+        result["bundle"]["manifest"],
+        result["bundle"]["timeline"],
+        result["transcript"]["artifact"],
+    ))
+
+
+def test_material_manifest_double_run_is_byte_identical(tmp_path: Path) -> None:
+    root = _material_bundle(tmp_path)
+    output = root / "exports" / "material-manifest.v1.json"
+
+    first = build_material_manifest(root)
+    first_bytes = output.read_bytes()
+    second = build_material_manifest(root)
+
+    assert first == second
+    assert output.read_bytes() == first_bytes
+
+
+def test_material_manifest_cli_build_and_validate(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    root = _material_bundle(tmp_path)
+
+    assert cli_main(["material-manifest", str(root)]) == 0
+    build_output = json.loads(capsys.readouterr().out)
+    assert build_output["schema"] == "material-manifest.v1"
+    assert cli_main(["material-manifest-validate", str(root)]) == 0
+    validate_output = json.loads(capsys.readouterr().out)
+    assert validate_output["status"] == "valid"
+    assert validate_output["metadata_authorizes_execution"] is False
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected_error"),
+    [
+        (row["mutation"], row["expected_error"])
+        for row in read_json(_MATERIAL_FIXTURE_ROOT / "negative" / "cases.v1.json")["cases"]
+    ],
+)
+def test_material_manifest_negative_fixtures_fail_closed(
+    tmp_path: Path,
+    mutation: str,
+    expected_error: str,
+) -> None:
+    root = _material_bundle(tmp_path)
+    output = root / "exports" / "material-manifest.v1.json"
+
+    if mutation == "missing_frame":
+        (root / "frames" / "frame_0000003000ms.jpg").unlink()
+        with pytest.raises((FileNotFoundError, ValueError), match=expected_error):
+            build_material_manifest(root)
+        return
+    if mutation == "frame_out_of_range":
+        timeline = read_json(root / "timeline.json")
+        timeline[0]["frame_timestamps_ms"] = [9000]
+        write_json(root / "timeline.json", timeline)
+        with pytest.raises(ValueError, match=expected_error):
+            build_material_manifest(root)
+        return
+    if mutation == "corrupt_input":
+        (root / "timeline.json").write_text("{broken", encoding="utf-8")
+        with pytest.raises(json.JSONDecodeError, match=expected_error):
+            build_material_manifest(root)
+        return
+
+    build_material_manifest(root)
+    payload = read_json(output)
+    if mutation == "unsupported_version":
+        payload["schema_version"] = "2.0"
+        _rehash_material_manifest(payload)
+        write_json(output, payload)
+    elif mutation == "manifest_hash_drift":
+        payload["bundle"]["title"] = "drifted title"
+        write_json(output, payload)
+    elif mutation == "stale_bundle":
+        timeline = read_json(root / "timeline.json")
+        timeline[0]["evidence_ids"].append("new-evidence")
+        write_json(root / "timeline.json", timeline)
+    elif mutation == "wrong_source_order":
+        payload["timeline_items"].reverse()
+        _rehash_material_manifest(payload)
+        write_json(output, payload)
+    else:  # pragma: no cover - fixture schema change must be reviewed.
+        raise AssertionError(f"unsupported negative fixture mutation: {mutation}")
+
+    with pytest.raises(ValueError, match=expected_error):
+        validate_material_manifest(root)
