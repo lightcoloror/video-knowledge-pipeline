@@ -2,6 +2,27 @@
 
 独立的视频知识提取工具。目标不是做视频摘要，而是尽量把知识类讲解视频中的语音、屏幕文字、图表、公式、代码、板书、界面状态、操作变化和非文字视觉信息提取成可读、可检索、可复习的资料。
 
+## 从公开克隆开始
+
+VKP 的最小安装不包含模型权重、LiteLLM、GPU 运行时或第三方源码目录。Python 3.11+ 环境中可按需安装：
+
+```powershell
+git clone https://github.com/lightcoloror/video-knowledge-pipeline.git
+cd video-knowledge-pipeline
+
+# 只安装本地业务核心
+python -m pip install -e .
+
+# 运行公开仓库离线测试所需的最小依赖
+python -m pip install -e ".[test]"
+python -m pytest -q
+
+# 无网络、无模型调用的配置 smoke
+video-knowledge config-status
+```
+
+按能力选择额外依赖：`.[local]` 提供本地场景结构分段，`.[online]` 提供 LiteLLM Proxy，`.[evaluation]` 提供说话人评测。缺少这些可选依赖或固定上游源码时，对应能力会明确显示 `blocked` 或测试 `skipped`；核心安装不会借用相邻仓库、自动下载模型或静默切换远程 Provider。开发环境可使用 `python -m pip install -e ".[dev]"`。
+
 ## 当前边界
 
 - 本仓库从 `question-video-knowledge` 抽出“看视频流程”。

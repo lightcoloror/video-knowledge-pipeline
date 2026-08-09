@@ -3,6 +3,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
+from video_knowledge_pipeline import entity_lexicon as entity_lexicon_module
 from video_knowledge_pipeline.entity_lexicon import build_entity_lexicon
 
 
@@ -21,7 +24,13 @@ def _bundle(
 
 def test_explicit_alias_creates_evidence_backed_correction_candidate(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(
+        entity_lexicon_module,
+        "_pinyin_backend",
+        lambda: "unavailable_explicit_alias_only",
+    )
     bundle = _bundle(
         tmp_path / "bundle",
         timeline=[{"index": 3, "transcript": "今天介绍米娅保险。"}],
@@ -46,7 +55,7 @@ def test_explicit_alias_creates_evidence_backed_correction_candidate(
     result = build_entity_lexicon(bundle, base_lexicon_json=lexicon, write=False)
 
     assert result["hotwords"] == ["明亚保险"]
-    assert result["pinyin_backend"] == "pypinyin"
+    assert result["pinyin_backend"] == "unavailable_explicit_alias_only"
     assert result["correction_candidates"][0]["original_text"] == "米娅保险"
     assert result["correction_candidates"][0]["corrected_text"] == "明亚保险"
     assert result["correction_candidates"][0]["auto_apply_allowed"] is True

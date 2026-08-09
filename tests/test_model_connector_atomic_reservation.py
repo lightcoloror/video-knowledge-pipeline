@@ -11,6 +11,8 @@ from pathlib import Path
 from threading import Barrier
 from typing import Any
 
+import pytest
+
 from video_knowledge_pipeline.model_connector_consent import (
     create_model_connector_consent,
     model_connector_consent_lock_path,
@@ -73,8 +75,11 @@ def test_cross_process_reservations_never_exceed_consent_limit(request: Any) -> 
     request.addfinalizer(lambda: shutil.rmtree(process_root, ignore_errors=True))
     consent = _create_consent(process_root, max_calls=3)
     context = multiprocessing.get_context("spawn")
-    start_event = context.Event()
-    result_queue = context.Queue()
+    try:
+        start_event = context.Event()
+        result_queue = context.Queue()
+    except PermissionError as exc:
+        pytest.skip(f"multiprocessing IPC is unavailable in this test environment: {exc}")
     processes = [
         context.Process(
             target=_reserve_in_process,

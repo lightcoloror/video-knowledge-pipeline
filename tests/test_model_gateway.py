@@ -38,6 +38,52 @@ def test_gateway_config_uses_single_loopback_port_source() -> None:
     assert configured["telemetry"] is False
 
 
+def test_gateway_doctor_blocks_cleanly_when_litellm_is_not_installed(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config_path = tmp_path / "gateway.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "schema": "video_knowledge_pipeline.model_gateway_config.v1",
+                "host": "127.0.0.1",
+                "port": 18776,
+                "telemetry": False,
+                "config_path": str(tmp_path / "generated.yaml"),
+                "pid_path": str(tmp_path / "gateway.pid"),
+                "log_path": str(tmp_path / "gateway.log"),
+            }
+        ),
+        encoding="utf-8",
+    )
+    port_record = tmp_path / "ports.md"
+    port_record.write_text("18776 VKP LiteLLM Proxy\n", encoding="utf-8")
+
+    def missing_optional_parent(name: str):
+        if name == "litellm.proxy.proxy_server":
+            raise ModuleNotFoundError("No module named 'litellm'")
+        return None
+
+    monkeypatch.setattr(gateway_module.importlib.util, "find_spec", missing_optional_parent)
+    monkeypatch.setattr(gateway_module, "_can_connect", lambda host, port: False)
+    monkeypatch.setattr(gateway_module, "_can_bind", lambda host, port: True)
+    monkeypatch.setattr(gateway_module, "_dynamic_tcp_port_range", lambda: None)
+
+    result = model_gateway_doctor(
+        gateway_config_path=config_path,
+        port_record_path=port_record,
+        probe_http=False,
+    )
+
+    check = next(row for row in result["checks"] if row["key"] == "litellm_proxy_module")
+    assert result["status"] == "blocked"
+    assert result["ready"] is False
+    assert check["ok"] is False
+    assert check["blocker"] == "optional_dependency_missing:litellm"
+    assert result["remote_requests_made"] is False
+
+
 def test_litellm_config_is_secretless_and_content_addressed(
     tmp_path: Path,
     monkeypatch,
@@ -613,6 +659,7 @@ def test_gateway_doctor_rejects_windows_dynamic_client_port(
     )
     monkeypatch.setattr(gateway_module, "_can_connect", lambda host, port: False)
     monkeypatch.setattr(gateway_module, "_can_bind", lambda host, port: True)
+    monkeypatch.setattr(gateway_module, "_optional_module_available", lambda name: True)
 
     result = model_gateway_doctor(
         gateway_config_path=config_path,
@@ -654,6 +701,7 @@ def test_gateway_doctor_accepts_registered_port_outside_dynamic_range(
     )
     monkeypatch.setattr(gateway_module, "_can_connect", lambda host, port: False)
     monkeypatch.setattr(gateway_module, "_can_bind", lambda host, port: True)
+    monkeypatch.setattr(gateway_module, "_optional_module_available", lambda name: True)
 
     result = model_gateway_doctor(
         gateway_config_path=config_path,

@@ -1153,7 +1153,9 @@ def test_background_submissions_parallelize_different_destinations(
 
 def test_recover_interrupted_candidate_never_reserves_a_second_call(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(parity, "project_root", lambda: tmp_path)
     settings, secrets, artifact = _stores(tmp_path)
     plan = parity.prepare_coding_tool_provider_parity(
         settings_path=settings,

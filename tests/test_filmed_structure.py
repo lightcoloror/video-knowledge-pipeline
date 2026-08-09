@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from video_knowledge_pipeline.filmed_structure import (
     BEAT_SCHEMA,
     SCENE_SCHEMA,
@@ -182,6 +184,7 @@ def test_missing_bge_embeddings_is_explicitly_degraded(tmp_path: Path) -> None:
 
 
 def test_actual_pinned_ruptures_pelt_smoke() -> None:
+    pytest.importorskip("ruptures", reason="optional local extra is not installed")
     features = [[0.0, 0.0] for _ in range(8)] + [
         [4.0, 4.0] for _ in range(8)
     ]

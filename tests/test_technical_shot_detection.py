@@ -204,10 +204,13 @@ def test_runtime_injection_preserves_explicit_backend_identity(
 def test_omnishotcut_missing_checkpoint_fails_closed(tmp_path: Path) -> None:
     media = tmp_path / "fixture.mp4"
     media.write_bytes(b"fixture")
+    source = tmp_path / "omnishotcut"
+    source.mkdir()
     with pytest.raises(FileNotFoundError, match="automatic download is disabled"):
         run_shot_boundary_runtime(
             backend="omnishotcut",
             media_path=media,
+            source_root=source,
             checkpoint_path=tmp_path / "missing.ckpt",
         )
 

@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from video_knowledge_pipeline import asr_runner
 
 
@@ -26,6 +28,10 @@ def test_moss_model_readiness_rejects_empty_huggingface_repo_shell(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
+    pytest.importorskip(
+        "huggingface_hub",
+        reason="optional local model-cache scanner is not installed",
+    )
     cache = tmp_path / "hub"
     revision = _snapshot(cache, complete=False)
     monkeypatch.setenv("HF_HUB_CACHE", str(cache))
@@ -50,6 +56,10 @@ def test_moss_model_readiness_reuses_huggingface_cache_scanner(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
+    pytest.importorskip(
+        "huggingface_hub",
+        reason="optional local model-cache scanner is not installed",
+    )
     cache = tmp_path / "hub"
     revision = _snapshot(cache, complete=True)
     monkeypatch.setenv("HF_HUB_CACHE", str(cache))

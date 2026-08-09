@@ -289,12 +289,20 @@ def model_gateway_doctor(
         if dynamic_range is None
         else f"{dynamic_range['start']}-{dynamic_range['end']}"
     )
+    litellm_proxy_available = _optional_module_available(
+        "litellm.proxy.proxy_server"
+    )
     checks = [
         {"key": "loopback_host", "ok": host in {"127.0.0.1", "localhost", "::1"}, "detail": host},
         {
             "key": "litellm_proxy_module",
-            "ok": importlib.util.find_spec("litellm.proxy.proxy_server") is not None,
+            "ok": litellm_proxy_available,
             "detail": "litellm.proxy.proxy_server",
+            "blocker": (
+                "optional_dependency_missing:litellm"
+                if not litellm_proxy_available
+                else ""
+            ),
         },
         {
             "key": "port_record",
@@ -335,6 +343,20 @@ def model_gateway_doctor(
         "remote_requests_made": False,
         "updated_at": _now_iso(),
     }
+
+
+def _optional_module_available(module_name: str) -> bool:
+    """Return optional dependency readiness without importing it.
+
+    ``find_spec`` raises ``ModuleNotFoundError`` for a dotted module when its
+    parent package is absent.  A clean core install must report that optional
+    capability as blocked instead of crashing unrelated status/UI paths.
+    """
+
+    try:
+        return importlib.util.find_spec(module_name) is not None
+    except (ImportError, ModuleNotFoundError, AttributeError, ValueError):
+        return False
 
 
 def model_gateway_status(

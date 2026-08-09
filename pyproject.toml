@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=77,<82", "wheel>=0.45,<1"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "video-knowledge-pipeline"
 version = "0.1.0"
@@ -18,6 +22,18 @@ shared_gateway = [
 evaluation = [
   "pyannote-metrics>=4.1,<5",
   "meeteval @ git+https://github.com/fgnt/meeteval.git@184ff17eb77fd6db4aba27a9e303a6a3edb09364",
+]
+test = [
+  "pytest>=9,<10",
+  "mcp>=1,<2",
+  "pillow>=10,<13",
+]
+dev = [
+  "pytest>=9,<10",
+  "mcp>=1,<2",
+  "pillow>=10,<13",
+  "build>=1.2,<2",
+  "ruff>=0.12,<1",
 ]
 
 [project.scripts]

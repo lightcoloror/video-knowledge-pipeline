@@ -9,6 +9,11 @@ def _project() -> dict:
         return tomllib.load(handle)["project"]
 
 
+def _pyproject() -> dict:
+    with Path("pyproject.toml").open("rb") as handle:
+        return tomllib.load(handle)
+
+
 def test_core_and_local_install_do_not_bundle_model_runtimes() -> None:
     project = _project()
     extras = project["optional-dependencies"]
@@ -65,7 +70,24 @@ def test_all_install_modes_use_the_same_business_package() -> None:
         "online",
         "hybrid",
         "evaluation",
+        "test",
+        "dev",
     }
+
+
+def test_public_clone_has_explicit_build_and_test_contracts() -> None:
+    document = _pyproject()
+    assert document["build-system"] == {
+        "requires": ["setuptools>=77,<82", "wheel>=0.45,<1"],
+        "build-backend": "setuptools.build_meta",
+    }
+    extras = document["project"]["optional-dependencies"]
+    assert extras["test"] == [
+        "pytest>=9,<10",
+        "mcp>=1,<2",
+        "pillow>=10,<13",
+    ]
+    assert set(extras["test"]).issubset(set(extras["dev"]))
 
 
 def test_model_gateway_smoke_readiness_cli_is_packaged() -> None:

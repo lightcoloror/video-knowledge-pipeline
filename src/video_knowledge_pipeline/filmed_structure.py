@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.metadata
 import math
 import subprocess
 import sys
@@ -199,21 +200,37 @@ def _run_pelt(
     min_size: int,
     jump: int,
 ) -> list[int]:
-    source_commit = _git_commit(DEFAULT_RUPTURES_SOURCE)
-    if source_commit != RUPTURES_COMMIT:
-        raise RuntimeError(
-            "ruptures source commit mismatch: "
-            f"expected={RUPTURES_COMMIT} actual={source_commit}"
-        )
     vendor = DEFAULT_RUPTURES_VENDOR.resolve()
-    if not vendor.is_dir():
-        raise FileNotFoundError(
-            "ruptures 1.1.10 local vendor is missing; no fallback is allowed"
-        )
-    if str(vendor) not in sys.path:
-        sys.path.insert(0, str(vendor))
-    import numpy as np
-    import ruptures as rpt
+    source_available = DEFAULT_RUPTURES_SOURCE.is_dir()
+    vendor_available = vendor.is_dir()
+    if source_available or vendor_available:
+        if not (source_available and vendor_available):
+            raise RuntimeError(
+                "reviewed ruptures source/vendor pair is incomplete; no implicit "
+                "fallback is allowed"
+            )
+        source_commit = _git_commit(DEFAULT_RUPTURES_SOURCE)
+        if source_commit != RUPTURES_COMMIT:
+            raise RuntimeError(
+                "ruptures source commit mismatch: "
+                f"expected={RUPTURES_COMMIT} actual={source_commit}"
+            )
+        if str(vendor) not in sys.path:
+            sys.path.insert(0, str(vendor))
+    try:
+        installed_version = importlib.metadata.version("ruptures")
+        if installed_version != RUPTURES_VERSION:
+            raise RuntimeError(
+                "ruptures version mismatch: "
+                f"expected={RUPTURES_VERSION} actual={installed_version}"
+            )
+        import numpy as np
+        import ruptures as rpt
+    except importlib.metadata.PackageNotFoundError as exc:
+        raise RuntimeError(
+            "optional dependency missing: install video-knowledge-pipeline[local] "
+            "to enable filmed structure segmentation"
+        ) from exc
 
     signal = np.asarray(features, dtype=float)
     return [
