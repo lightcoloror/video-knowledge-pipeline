@@ -82,6 +82,7 @@ def export_knowledge_note(
     readable_timeline = _timeline_with_canonical_transcript(root, manifest, timeline)
     summary = _build_summary(manifest, readable_timeline)
     transcript_quality_gate = _safe_transcript_quality_gate(root, write=write)
+    speaker_review = _speaker_review(root)
     if transcript_quality_gate.get("status") not in {"unavailable", "error"}:
         manifest["transcript_quality_gate_summary"] = {
             "status": transcript_quality_gate.get("status"),
@@ -120,6 +121,7 @@ def export_knowledge_note(
         participant_count=_reader_participant_count(
             manifest,
             transcript_quality_gate,
+            speaker_review,
         ),
     )
     audit_markdown = _render_extraction_audit(root, note_title, manifest, timeline, summary, term_correction)
@@ -220,6 +222,7 @@ def export_knowledge_note(
                 participant_count=_reader_participant_count(
                     manifest,
                     transcript_quality_gate,
+                    speaker_review,
                 ),
             )
             audit_markdown = _render_extraction_audit(root, note_title, manifest, timeline, summary, term_correction)
@@ -1532,6 +1535,9 @@ def _render_full_transcript(
             source_error = ""
         if cues:
             lines = [f"# {title} - 原始转录", ""]
+            speaker_notice = _speaker_review_notice(_speaker_review(bundle_dir))
+            if speaker_notice:
+                lines.extend([f"> {speaker_notice}", ""])
             lines.extend(_full_transcript_lines_from_cues(cues))
             return "\n".join(lines).rstrip() + "\n"
     lines = [
@@ -2224,15 +2230,27 @@ def _reader_content_type(manifest: dict[str, Any]) -> str:
 def _reader_participant_count(
     manifest: dict[str, Any],
     transcript_quality_gate: dict[str, Any],
+    speaker_review: dict[str, Any] | None = None,
 ) -> int:
-    """Prefer observed speaker clusters, then an explicit manifest declaration.
+    """Prefer a human-confirmed participant count, then machine evidence.
 
-    Intent: expose evidence-backed participant count in the final note.
-    Decision: reuse the diarization quality result; fall back to declared counts.
-    Reason: participant count must not be invented by the summary model.
-    Evidence: ``transcript-quality-gate`` already validates distinct clusters.
+    Intent: avoid presenting chunk-local diarization clusters as real people.
+    Decision: accept ``speaker-review.json`` only when its status explicitly
+    confirms the count; otherwise reuse the diarization gate and declarations.
+    Reason: long recordings may restart clustering for every ASR chunk.
+    Evidence: five chunk-local labels were observed while the user confirmed
+    three primary speakers.
     Effective scope: final-note metadata only; roles/names remain unmodified.
     """
+
+    review = speaker_review if isinstance(speaker_review, dict) else {}
+    if str(review.get("status") or "") == "human_confirmed_count":
+        try:
+            confirmed = int(review.get("confirmed_participant_count") or 0)
+        except (TypeError, ValueError):
+            confirmed = 0
+        if confirmed > 0:
+            return confirmed
 
     speaker_gate = (
         transcript_quality_gate.get("speaker_diarization")
@@ -2258,6 +2276,38 @@ def _reader_participant_count(
         if count > 0:
             return count
     return 0
+
+
+def _speaker_review(root: Path) -> dict[str, Any]:
+    path = root / "speaker-review.json"
+    if not path.exists():
+        return {}
+    try:
+        review = read_json(path)
+    except Exception:
+        return {}
+    if not isinstance(review, dict):
+        return {}
+    if review.get("schema") != "video_knowledge_pipeline.speaker_review.v1":
+        return {}
+    return review
+
+
+def _speaker_review_notice(review: dict[str, Any]) -> str:
+    if str(review.get("status") or "") != "human_confirmed_count":
+        return ""
+    try:
+        confirmed = int(review.get("confirmed_participant_count") or 0)
+        observed = int(review.get("observed_cluster_count") or 0)
+    except (TypeError, ValueError):
+        return ""
+    if confirmed <= 0 or observed <= confirmed:
+        return ""
+    return (
+        f"说话人说明：人工确认实际有 {confirmed} 位主要说话人；当前逐字稿中的 "
+        f"{observed} 个‘说话人’编号是分块声纹聚类标签，跨块身份尚未统一，"
+        "不代表真实参与人数。"
+    )
 
 
 def _smart_visual_status(summary: dict[str, Any]) -> str:

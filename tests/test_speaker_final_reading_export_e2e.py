@@ -3,7 +3,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from video_knowledge_pipeline.knowledge_note_export import export_knowledge_note
+from video_knowledge_pipeline.knowledge_note_export import (
+    _reader_participant_count,
+    _speaker_review_notice,
+    export_knowledge_note,
+)
 
 
 def test_two_speaker_source_fidelity_reaches_single_reader_document(
@@ -117,3 +121,30 @@ def test_two_speaker_source_fidelity_reaches_single_reader_document(
     assert transcript.count("**说话人2**") == 1
     assert gate["speaker_diarization"]["passed"] is True
     assert gate["speaker_diarization"]["distinct_speaker_count"] == 2
+
+
+def test_human_confirmed_speaker_count_overrides_chunk_local_clusters() -> None:
+    """Keep cluster evidence while using the confirmed participant count.
+
+    Intent: prevent chunk-local cluster IDs from being reported as people.
+    Decision: use a reviewed sidecar for reader metadata and show a notice,
+    without rewriting individual speaker attributions.
+    Reason: merging labels without global voice evidence can misattribute text.
+    Evidence: production yielded five labels while the user confirmed three.
+    Effective scope: reader exports only; canonical transcript is unchanged.
+    """
+
+    review = {
+        "schema": "video_knowledge_pipeline.speaker_review.v1",
+        "status": "human_confirmed_count",
+        "confirmed_participant_count": 3,
+        "observed_cluster_count": 5,
+        "cluster_mapping_status": "unresolved_chunk_local_labels",
+    }
+    gate = {"speaker_diarization": {"distinct_speaker_count": 5}}
+
+    assert _reader_participant_count({}, gate, review) == 3
+    assert _reader_participant_count({}, gate, {}) == 5
+    notice = _speaker_review_notice(review)
+    assert "人工确认实际有 3 位主要说话人" in notice
+    assert "5 个‘说话人’编号是分块声纹聚类标签" in notice
