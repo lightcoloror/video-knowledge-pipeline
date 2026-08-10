@@ -4027,7 +4027,14 @@ def _review_video_panel(package: dict[str, Any]) -> str:
 """
 
 
-def _review_media_path(package: dict[str, Any]) -> str:
+def review_media_reference(package: dict[str, Any]) -> str:
+    """Return the registered media reference already used by lecture review.
+
+    This intentionally performs no directory scan. Bundle consumers can reuse
+    the same source precedence and then resolve the returned reference relative
+    to the owning manifest/package.
+    """
+
     artifacts = package.get("review_artifacts") if isinstance(package.get("review_artifacts"), dict) else {}
     for key in ("media_path", "video_path", "multimodal_sample_review_media_path"):
         value = artifacts.get(key) or package.get(key)
@@ -4048,6 +4055,46 @@ def _review_media_path(package: dict[str, Any]) -> str:
             if value and str(value).lower().endswith((".mp4", ".mkv", ".mov", ".webm", ".avi", ".m4v")):
                 return str(value)
     return ""
+
+
+def resolve_review_media_path(bundle_dir: str | Path, manifest: dict[str, Any]) -> Path | None:
+    """Resolve review media from a Bundle manifest or its source package.
+
+    Intent: keep every local review surface on the lecture package's existing
+    media-selection contract. Decision: inspect only registered manifest and
+    ``source_package`` references. Reason: scanning nearby folders can bind the
+    wrong interview or a stale transcode. Evidence: real VKP interview Bundles
+    register media under ``sources[].path`` in lecture-package.json rather than
+    ``manifest.media_path``. Effective scope: local review playback only.
+    """
+
+    root = Path(bundle_dir).expanduser().resolve()
+    containers: list[tuple[dict[str, Any], Path]] = [(manifest, root)]
+    package_ref = str(manifest.get("source_package") or "").strip()
+    if package_ref:
+        package_path = Path(package_ref).expanduser()
+        package_path = package_path if package_path.is_absolute() else root / package_path
+        package_path = package_path.resolve()
+        if package_path.is_file():
+            package = read_json(package_path)
+            if isinstance(package, dict):
+                containers.append((package, package_path.parent))
+    for container, base in containers:
+        raw = review_media_reference(container).strip()
+        if not raw:
+            continue
+        path = Path(raw).expanduser()
+        path = path if path.is_absolute() else base / path
+        path = path.resolve()
+        if path.is_file():
+            return path
+    return None
+
+
+def _review_media_path(package: dict[str, Any]) -> str:
+    """Backward-compatible private alias for existing rendered review pages."""
+
+    return review_media_reference(package)
 
 
 def _source_row(source: dict[str, Any]) -> str:

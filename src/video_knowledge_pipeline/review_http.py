@@ -14,6 +14,7 @@ from typing import Any
 from urllib.parse import unquote, urlsplit
 
 from .review_writeback import apply_review_payload_to_bundle
+from .lecture_package import resolve_review_media_path
 from .shot_review import apply_shot_review_notes
 from .subtitle_editor import apply_subtitle_review, build_subtitle_editor_projection, validate_subtitle_review
 from .subtitle_editor_ui import render_subtitle_editor_page
@@ -368,12 +369,7 @@ def _bundle_media_path(root: Path) -> Path | None:
     manifest = read_json(root / "manifest.json")
     if not isinstance(manifest, dict):
         return None
-    raw = str(manifest.get("multimodal_sample_review_media_path") or manifest.get("media_path") or "").strip()
-    if not raw:
-        return None
-    path = Path(raw).expanduser()
-    path = (path if path.is_absolute() else root / path).resolve()
-    return path if path.is_file() else None
+    return resolve_review_media_path(root, manifest)
 
 
 def _safe_bundle_file(root: Path, request_path: str) -> Path | None:

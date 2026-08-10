@@ -1,6 +1,6 @@
 # moys-asr-workflow 完整字幕编辑器集成
 
-更新时间：2026-08-10 18:14:34 +08:00
+更新时间：2026-08-10 19:16:59 +08:00
 执行工具/模型：Codex / GPT-5.6 Sol
 
 ## 结果
@@ -77,6 +77,15 @@ VKP 以 `Moyf/moys-asr-workflow` v1.3.1、commit
 - 生效范围：编辑器显示和导出计划。
 - 回滚：移除 Bundle `stickers/` 或停用颜色投影。
 
+### SUBTITLE-EDITOR-07：真实分块 Bundle 的媒体与时间 lineage
+
+- 意图：让媒体由 source package 登记、segment ID 按块重启、边界存在重叠的真实采访也能进入人工编辑。
+- 决策：复用 lecture review 的 `review_media_reference` 优先级，并新增只解析已登记 manifest/source-package 的路径解析器；重复 ID 在投影中增加 occurrence-scoped `segment_id/source_lineage_ids`，同时保留原 `original_segment_id/source_segment_ids`；重叠段显示为 `overlap_requires_review`，不自动裁剪。
+- 理由：按附近文件名猜视频可能绑定错误素材；覆盖原 ID 会切断来源；自动删除分块重叠可能损失讲话。
+- 证据：第一真实 Bundle 通过 `lecture-package.json sources[].path` 成功预检 15 段；第二真实 Bundle 从原先第 305 段报错改为生成 469 段投影，识别 88 个重复 ID key 和 2 处需要人工校正的时间重叠；正式 review 未消除重叠时仍 fail-closed。
+- 生效范围：本地播放器媒体解析、编辑投影和正式 apply 验证；不写真实 Bundle、不改 canonical transcript。
+- 回滚：移除附加解析/lineage 投影，旧 manifest-only Bundle 仍可使用；旧草稿由 projection SHA 漂移门自动阻断。
+
 ## 合同与产物
 
 - `video_knowledge_pipeline.subtitle_editor_projection.v1`
@@ -102,12 +111,13 @@ VKP 以 `Moyf/moys-asr-workflow` v1.3.1、commit
 ## 验证结果
 
 - 上游编辑器/波形 JavaScript：`92 passed / 0 failed`。
-- VKP 新合同与 Loopback HTTP：`10 passed / 0 failed`。
-- Workbench、旧编辑器、Review Server、翻译、全局说话人和 Smart Summary 新鲜度关联回归：`33 passed / 0 failed`。
+- VKP 新合同与 Loopback HTTP（含 source-package、重复分块 ID 和重叠边界）：`12 passed / 0 failed`。
+- Workbench、旧编辑器、Review Server、翻译、新鲜度及 Chrome Playwright 关联回归：`31 passed / 0 failed`。
 - 本地 Chrome Playwright（合成 Bundle）：`2 passed / 0 failed`；未配置浏览器的公开克隆行为为 `2 skipped`，不下载浏览器。
 - Ruff（本轮 Python/测试）和 JavaScript/Python 语法检查：通过。
 - 完整离线 pytest：`1650 passed / 2 failed / 6 skipped`。两项失败可单独稳定复现，且对应文件均不在本轮 diff：既有 Global Reduce 在 3000 字预算测试中输出 3006 字；既有说话人文档含 `D:\used-by-codex` 绝对路径，触发公开快照门。本轮不夹带无关修复。
 - 全局源码账本：`error_count=0`；另有 100 条既存 warning，未由本轮新增。
+- 两个真实采访 Bundle 只读预检：`15 segments / ready / 0 overlap` 与 `469 segments / needs_review / 2 overlaps`；`write=false`，没有改真实产物。
 
 ## 源码准入与验证
 

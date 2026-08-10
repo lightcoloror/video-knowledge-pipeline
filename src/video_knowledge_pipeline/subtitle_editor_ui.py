@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from .models import now_iso
+from .lecture_package import resolve_review_media_path
 from .run_artifact_registry import register_bundle_run
 from .storage import read_json, write_json
 from .subtitle_editor import build_subtitle_editor_projection
@@ -63,6 +64,8 @@ def prepare_subtitle_editor(
         "projection_sha256": projection["projection_sha256"],
         "segment_count": len(projection["segments"]),
         "translation_status": projection["tracks"]["mandarin"]["status"],
+        "timing_review_status": projection["timing_review"]["status"],
+        "timing_overlap_count": projection["timing_review"]["overlap_count"],
         "write": bool(write),
     }
 
@@ -159,6 +162,7 @@ def _upstream_project(projection: dict[str, Any]) -> dict[str, Any]:
                 "mandarin_text": row["mandarin_text"],
                 "segment_id": row["segment_id"],
                 "source_segment_ids": row["source_segment_ids"],
+                "source_lineage_ids": row["source_lineage_ids"],
                 "speaker": row["speaker_global_id"] or None,
                 "speaker_global_id": row["speaker_global_id"],
                 "speaker_role": row["speaker_role"],
@@ -167,6 +171,7 @@ def _upstream_project(projection: dict[str, Any]) -> dict[str, Any]:
                 "color": color,
                 "color_ref": None,
                 "disabled": bool(row.get("disabled")),
+                "timing_status": row.get("timing_status") or "ready",
             }
         )
     return {
@@ -221,14 +226,9 @@ def _approved_stickers(root: Path) -> list[dict[str, str]]:
 
 
 def _media_path(root: Path, manifest: dict[str, Any]) -> Path:
-    raw = str(manifest.get("media_path") or manifest.get("source_video") or "").strip()
-    if not raw:
-        raise ValueError("subtitle editor requires manifest.media_path")
-    path = Path(raw).expanduser()
-    path = path if path.is_absolute() else root / path
-    path = path.resolve()
-    if not path.is_file():
-        raise ValueError(f"subtitle editor media is missing: {path}")
+    path = resolve_review_media_path(root, manifest)
+    if path is None:
+        raise ValueError("subtitle editor requires registered Bundle or source-package media")
     return path
 
 

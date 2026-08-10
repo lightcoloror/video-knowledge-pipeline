@@ -1212,16 +1212,16 @@ The receipt commands consume completed local execution evidence; they never star
 
 ## 2026-08-10 Dual-track subtitle editor
 
-- Updated: 2026-08-10 18:14:34 +08:00 by Codex / GPT-5.6 Sol.
+- Updated: 2026-08-10 19:16:59 +08:00 by Codex / GPT-5.6 Sol.
 - Stable preparation: `scripts\video-knowledge.ps1 prepare-subtitle-editor <bundle>`.
 - Review server: `scripts\start-review-webui.ps1 <bundle>` then open `/subtitle-editor`.
 - Offline validation/apply: `validate-subtitle-review` and `apply-subtitle-review --review-json <path>`.
 - Contracts: `video_knowledge_pipeline.subtitle_editor_projection.v1`, `subtitle_review_notes.v1`, `human_reviewed_subtitle_track.v1`, and `subtitle_review_apply_receipt.v1`.
 - Upstream: Moyf/moys-asr-workflow v1.3.1 commit `949bc84058cdae1d9c021c50203e6d2742f9392c`, AGPL-3.0-only; only the eight root `web/` assets are vendored.
 - Intent: reuse the complete upstream player/waveform/subtitle/workspace editor while giving VKP Cantonese-source and Mandarin-translation tracks with one shared timeline.
-- Decision: browser drafts are isolated by Bundle/source hash; formal apply requires loopback CSRF plus exact projection lineage and writes derived sidecars only.
+- Decision: browser drafts are isolated by Bundle/source hash; formal apply requires loopback CSRF plus exact projection lineage and writes derived sidecars only. Media resolution reuses registered manifest/source-package references; duplicate chunk IDs gain editor-only occurrence lineage, and unresolved timing overlaps remain blocked at apply.
 - Reason: editing convenience must not create a second transcript truth or overwrite raw ASR, Timeline, translation evidence, or media.
-- Evidence: upstream JavaScript tests 92/92; VKP contract/HTTP tests 10/10; related editor/review/workbench/translation/speaker/freshness tests 33/33; local Chrome Playwright draft/apply/revision-conflict tests 2/2.
+- Evidence: upstream JavaScript tests 92/92; VKP contract/HTTP tests 12/12; related editor/review/workbench/translation/freshness tests 31/31 including local Chrome Playwright 2/2; real Bundle no-write preflights produced 15/469 segments and surfaced 0/2 timing overlaps.
 - Effective scope: local subtitle review, source/translation SRT/VTT/ASS, OTIO/FFconcat/kept-range plans, and downstream stale markers. No Provider, upload, model, FFmpeg execution, publish, or arbitrary sticker path.
 - Rollback: stop invoking the new commands/routes and continue using `transcript-editor.html`.
 - Detailed record: `docs/moys-asr-workflow-subtitle-editor-integration-2026-08-10.md`.

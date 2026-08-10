@@ -1,5 +1,16 @@
 # Change rationale
 
+## 2026-08-10 19:16:59 +08:00 | Codex (GPT-5.6 Sol) | real-Bundle subtitle compatibility closure
+
+### CR-20260810-05 — Registered media reuse and ambiguous chunk lineage
+
+- 意图：让真实分块采访 Bundle 能直接进入字幕编辑器，同时不把错误绑定或 ASR 重叠静默写入正式字幕。
+- 决策：字幕页与 Review Server 复用 lecture review 既有媒体选择顺序，只解析 manifest/source-package 已登记引用，不扫描邻近目录；重复的分块 segment/source ID 仅在编辑投影中增加确定性 occurrence lineage，原 ID 保留；原始重叠允许进入草稿并标为 `overlap_requires_review`，正式 apply 继续要求时间单调且无重叠。
+- 理由：真实 Bundle 把媒体登记在 `lecture-package.json sources[].path`，且分块 ASR 会重启局部 ID、保留少量交叠窗口；直接拒绝无法编辑，自动裁边或猜媒体又会破坏证据。
+- 证据：两个真实采访 Bundle `--no-write` 预检分别生成 15 段/0 重叠和 469 段/2 重叠投影；新增 source-package、重复 ID、重叠未修复阻断与修复后通过回归；相关套件 31/31（含 Chrome Playwright 2/2）。
+- 生效范围：本地 review media 解析、`subtitle_editor_projection.v1` 的附加 lineage/timing-review 字段和人工字幕正式写回门；原始 ASR、Timeline、媒体、翻译及真实 Bundle 均未修改。
+- 回滚方式：恢复只接受 manifest 直连媒体并重新生成投影；原始输入始终保留，已生成的旧草稿会因 projection SHA 变化而拒绝覆盖。
+
 ## 2026-08-10 18:42:00 +08:00 | Codex (GPT-5.6 Sol) | moys-asr-workflow subtitle editor integration
 
 ### CR-20260810-01 — Fixed upstream editor shell

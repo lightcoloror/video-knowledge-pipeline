@@ -46,18 +46,20 @@ def build_subtitle_editor_projection(
         _projection_segment(
             cue,
             index=index,
-            translation=translations.get(_cue_key(cue, index), ""),
-            supplemental=supplemental.get(_cue_key(cue, index), {}),
+            translation=translations.get(f"index:{index}", translations.get(_cue_key(cue, index), "")),
+            supplemental=supplemental.get(f"index:{index}", supplemental.get(_cue_key(cue, index), {})),
         )
         for index, cue in enumerate(cues)
     ]
-    _validate_projection_segments(segments)
+    segments = _stabilize_projection_lineage(segments)
+    timing_review = _validate_projection_segments(segments)
     media_duration_ms = _media_duration_ms(manifest, segments)
     source_payload = {
         "title": str(manifest.get("title") or root.name),
         "segments": segments,
         "translation_status": translation_status,
         "media_duration_ms": media_duration_ms,
+        "timing_review": timing_review,
     }
     source_sha256 = _sha256_json(source_payload)
     payload: dict[str, Any] = {
@@ -72,6 +74,7 @@ def build_subtitle_editor_projection(
             "mandarin": {"language": "zh-CN", "editable": True, "status": translation_status},
         },
         "segments": segments,
+        "timing_review": timing_review,
         "operator_boundary": {
             "local_only": True,
             "no_provider_execution": True,
@@ -154,13 +157,13 @@ def apply_subtitle_review(
             "subtitle_boundaries_are_derived": True,
         },
     }
-    original_by_source = {
-        source_id: segment
+    original_by_lineage = {
+        lineage_id: segment
         for segment in validated["source_segments"]
-        for source_id in segment["source_segment_ids"]
+        for lineage_id in segment.get("source_lineage_ids") or segment["source_segment_ids"]
     }
     corrected_segments = [
-        _corrected_segment(row, index, original_by_source=original_by_source)
+        _corrected_segment(row, index, original_by_lineage=original_by_lineage)
         for index, row in enumerate(rows)
     ]
     corrected_payload = {
@@ -396,6 +399,7 @@ def _load_translations(root: Path, manifest: dict[str, Any]) -> tuple[dict[str, 
         text = str(row.get("text") or "").strip()
         if text:
             result[key] = text
+            result[f"index:{index}"] = text
     return result, "ready" if result else "missing"
 
 
@@ -433,6 +437,7 @@ def _load_supplemental_segment_metadata(root: Path, manifest: dict[str, Any]) ->
                 continue
             key = str(row.get("segment_id") or row.get("id") or f"segment-{index + 1:06d}")
             result[key] = row
+            result[f"index:{index}"] = row
         if result:
             return result
     return {}
@@ -442,16 +447,83 @@ def _cue_key(cue: TranscriptCue, index: int) -> str:
     return str(getattr(cue, "segment_id", "") or f"index:{index}")
 
 
-def _validate_projection_segments(rows: list[dict[str, Any]]) -> None:
+def _stabilize_projection_lineage(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Add deterministic editor-only IDs while preserving provider lineage.
+
+    Chunked ASR providers commonly restart ``segment-000001`` for each chunk.
+    VKP keeps those original IDs and adds occurrence-scoped IDs only where a
+    duplicate would otherwise make editing ambiguous.
+    """
+
+    segment_counts: dict[str, int] = {}
+    source_counts: dict[str, int] = {}
+    for row in rows:
+        segment_id = str(row.get("segment_id") or "")
+        segment_counts[segment_id] = segment_counts.get(segment_id, 0) + 1
+        for source_id in row.get("source_segment_ids") or []:
+            source_text = str(source_id)
+            source_counts[source_text] = source_counts.get(source_text, 0) + 1
+    segment_seen: dict[str, int] = {}
+    source_seen: dict[str, int] = {}
+    result: list[dict[str, Any]] = []
+    for index, original in enumerate(rows):
+        row = dict(original)
+        segment_id = str(row.get("segment_id") or f"segment-{index + 1:06d}")
+        segment_seen[segment_id] = segment_seen.get(segment_id, 0) + 1
+        if segment_counts.get(segment_id, 0) > 1:
+            row["original_segment_id"] = segment_id
+            row["segment_id"] = f"{segment_id}::occurrence-{segment_seen[segment_id]:03d}"
+        lineage_ids: list[str] = []
+        for source_id in row.get("source_segment_ids") or [segment_id]:
+            source_text = str(source_id)
+            source_seen[source_text] = source_seen.get(source_text, 0) + 1
+            if source_counts.get(source_text, 0) > 1:
+                lineage_ids.append(f"{source_text}::occurrence-{source_seen[source_text]:03d}")
+            else:
+                lineage_ids.append(source_text)
+        row["source_lineage_ids"] = lineage_ids
+        result.append(row)
+    return result
+
+
+def _validate_projection_segments(rows: list[dict[str, Any]]) -> dict[str, Any]:
     previous_end = 0
+    previous_index = -1
+    seen_ids: set[str] = set()
+    overlaps: list[dict[str, Any]] = []
     for index, row in enumerate(rows):
         start = row["start_ms"]
         end = row["end_ms"]
-        if start < previous_end or end <= start:
+        segment_id = str(row.get("segment_id") or "")
+        if not segment_id or segment_id in seen_ids:
+            raise ValueError(f"missing or duplicate projection segment ID at segment {index}")
+        seen_ids.add(segment_id)
+        if start < 0 or end <= start:
             raise ValueError(f"invalid transcript timing at segment {index}")
         if not str(row.get("source_text") or "").strip():
             raise ValueError(f"empty transcript text at segment {index}")
-        previous_end = end
+        row["timing_status"] = "ready"
+        if previous_index >= 0 and start < previous_end:
+            left = rows[previous_index]
+            overlap_ms = previous_end - start
+            left["timing_status"] = "overlap_requires_review"
+            row["timing_status"] = "overlap_requires_review"
+            overlaps.append(
+                {
+                    "left_segment_id": str(left["segment_id"]),
+                    "right_segment_id": segment_id,
+                    "overlap_ms": overlap_ms,
+                }
+            )
+        if end > previous_end:
+            previous_end = end
+            previous_index = index
+    return {
+        "status": "needs_review" if overlaps else "ready",
+        "overlap_count": len(overlaps),
+        "overlaps": overlaps,
+        "apply_requires_resolved_timing": True,
+    }
 
 
 def _validate_review_segments(
@@ -463,11 +535,17 @@ def _validate_review_segments(
     source_order: dict[str, int] = {}
     source_speaker: dict[str, str] = {}
     source_translation: dict[str, bool] = {}
+    source_original_ids: dict[str, str] = {}
     for index, row in enumerate(originals):
-        for source_id in row["source_segment_ids"]:
-            source_order[source_id] = index
-            source_speaker[source_id] = str(row.get("speaker_global_id") or "")
-            source_translation[source_id] = bool(str(row.get("mandarin_text") or "").strip())
+        original_ids = [str(value) for value in row["source_segment_ids"]]
+        lineage_ids = [str(value) for value in (row.get("source_lineage_ids") or original_ids)]
+        if len(lineage_ids) != len(original_ids):
+            raise ValueError(f"projection lineage is invalid at segment {index}")
+        for lineage_id, source_id in zip(lineage_ids, original_ids, strict=True):
+            source_order[lineage_id] = index
+            source_speaker[lineage_id] = str(row.get("speaker_global_id") or "")
+            source_translation[lineage_id] = bool(str(row.get("mandarin_text") or "").strip())
+            source_original_ids[lineage_id] = source_id
     normalized: list[dict[str, Any]] = []
     covered: set[str] = set()
     previous_end = 0
@@ -483,15 +561,19 @@ def _validate_review_segments(
             raise ValueError(f"segments[{index}].segment_id is missing or duplicate")
         seen_segment_ids.add(segment_id)
         source_ids = [str(value).strip() for value in (raw.get("source_segment_ids") or []) if str(value).strip()]
-        if not source_ids:
+        lineage_ids = [str(value).strip() for value in (raw.get("source_lineage_ids") or source_ids) if str(value).strip()]
+        if not source_ids or not lineage_ids:
             raise ValueError(f"segments[{index}].source_segment_ids must not be empty")
-        for source_id in source_ids:
-            if source_id not in source_order:
-                raise ValueError(f"unknown source_segment_id: {source_id}")
-        indexes = [source_order[source_id] for source_id in source_ids]
+        for lineage_id in lineage_ids:
+            if lineage_id not in source_order:
+                raise ValueError(f"unknown source lineage ID: {lineage_id}")
+        resolved_source_ids = [source_original_ids[lineage_id] for lineage_id in lineage_ids]
+        if source_ids != resolved_source_ids:
+            raise ValueError("source_segment_ids do not match the current projection lineage")
+        indexes = [source_order[lineage_id] for lineage_id in lineage_ids]
         if indexes != list(range(min(indexes), max(indexes) + 1)):
             raise ValueError("merged source segments must be contiguous")
-        speakers = {source_speaker[source_id] for source_id in source_ids if source_speaker[source_id]}
+        speakers = {source_speaker[lineage_id] for lineage_id in lineage_ids if source_speaker[lineage_id]}
         if len(speakers) > 1:
             raise ValueError("cannot merge source segments from different speakers")
         current_source_index = min(indexes)
@@ -506,13 +588,14 @@ def _validate_review_segments(
         if not source_text:
             raise ValueError(f"segments[{index}].source_text must not be empty")
         mandarin_text = str(raw.get("mandarin_text") or "").strip()
-        for source_id in source_ids:
-            split_counts[source_id] = split_counts.get(source_id, 0) + 1
-            covered.add(source_id)
+        for lineage_id in lineage_ids:
+            split_counts[lineage_id] = split_counts.get(lineage_id, 0) + 1
+            covered.add(lineage_id)
         normalized.append(
             {
                 "segment_id": segment_id,
                 "source_segment_ids": source_ids,
+                "source_lineage_ids": lineage_ids,
                 "start_ms": start,
                 "end_ms": end,
                 "speaker_global_id": next(iter(speakers), str(raw.get("speaker_global_id") or "")),
@@ -530,27 +613,28 @@ def _validate_review_segments(
         raise ValueError(f"review omits source segments: {missing}")
     for source_id, count in split_counts.items():
         if count > 1 and source_translation[source_id]:
-            related = [row for row in normalized if source_id in row["source_segment_ids"]]
+            related = [row for row in normalized if source_id in row["source_lineage_ids"]]
             if any(not row["mandarin_text"] for row in related):
                 raise ValueError(f"split source {source_id} requires reviewed mandarin_text for every part")
     return normalized
 
 
 def _review_summary(originals: list[dict[str, Any]], rows: list[dict[str, Any]]) -> dict[str, Any]:
-    original_by_source = {
-        source_id: row
+    original_by_lineage = {
+        lineage_id: row
         for row in originals
-        for source_id in row["source_segment_ids"]
+        for lineage_id in row.get("source_lineage_ids") or row["source_segment_ids"]
     }
     changed_text = 0
     changed_translation = 0
     changed_timing = 0
     for row in rows:
-        if len(row["source_segment_ids"]) != 1:
+        lineage_ids = row.get("source_lineage_ids") or row["source_segment_ids"]
+        if len(lineage_ids) != 1:
             changed_text += 1
             changed_timing += 1
             continue
-        original = original_by_source[row["source_segment_ids"][0]]
+        original = original_by_lineage[lineage_ids[0]]
         changed_text += int(row["source_text"] != original["source_text"])
         changed_translation += int(row["mandarin_text"] != original["mandarin_text"])
         changed_timing += int(row["start_ms"] != original["start_ms"] or row["end_ms"] != original["end_ms"])
@@ -568,17 +652,19 @@ def _corrected_segment(
     row: dict[str, Any],
     index: int,
     *,
-    original_by_source: dict[str, dict[str, Any]],
+    original_by_lineage: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
+    lineage_ids = row.get("source_lineage_ids") or row["source_segment_ids"]
     raw_text = " ".join(
-        str(original_by_source[source_id].get("source_text") or "").strip()
-        for source_id in row["source_segment_ids"]
-        if source_id in original_by_source
+        str(original_by_lineage[lineage_id].get("source_text") or "").strip()
+        for lineage_id in lineage_ids
+        if lineage_id in original_by_lineage
     ).strip()
     return {
         "index": index,
         "segment_id": row["segment_id"],
         "source_segment_ids": list(row["source_segment_ids"]),
+        "source_lineage_ids": list(lineage_ids),
         "start": row["start_ms"] / 1000.0,
         "end": row["end_ms"] / 1000.0,
         "timestamp": _clock(row["start_ms"] / 1000.0),

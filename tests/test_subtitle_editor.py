@@ -138,7 +138,8 @@ def test_validate_rejects_route_drift_unknown_source_and_cross_speaker_merge(tmp
 
     notes = _notes(projection)
     notes["segments"][0]["source_segment_ids"] = ["missing-source"]
-    with pytest.raises(ValueError, match="unknown source_segment_id"):
+    notes["segments"][0]["source_lineage_ids"] = ["missing-source"]
+    with pytest.raises(ValueError, match="unknown source lineage ID"):
         validate_subtitle_review(bundle, notes)
 
     notes = _notes(projection)
@@ -147,6 +148,7 @@ def test_validate_rejects_route_drift_unknown_source_and_cross_speaker_merge(tmp
             **notes["segments"][0],
             "segment_id": "human-merge",
             "source_segment_ids": ["raw-1", "raw-2"],
+            "source_lineage_ids": ["raw-1", "raw-2"],
             "start_ms": 0,
             "end_ms": 4500,
         }
@@ -173,6 +175,90 @@ def test_validate_rejects_duplicate_id_out_of_media_bounds_and_damaged_json(tmp_
     damaged.write_text("{not-json", encoding="utf-8")
     with pytest.raises((ValueError, json.JSONDecodeError)):
         validate_subtitle_review(bundle, damaged)
+
+
+def test_prepare_reuses_registered_source_package_media_without_scanning(tmp_path: Path) -> None:
+    bundle = _bundle(tmp_path)
+    manifest = json.loads((bundle / "manifest.json").read_text(encoding="utf-8"))
+    media_path = manifest.pop("media_path")
+    source_package = bundle.parent / "lecture-packages" / "lecture-package.json"
+    _write_json(
+        source_package,
+        {
+            "schema": "video_knowledge_pipeline.lecture_package.v1",
+            "sources": [{"video_id": "video-1", "path": media_path}],
+        },
+    )
+    manifest["source_package"] = str(source_package)
+    manifest["sources"] = []
+    _write_json(bundle / "manifest.json", manifest)
+
+    result = prepare_subtitle_editor(bundle, write=False)
+
+    assert result["ok"] is True
+    assert result["timing_review_status"] == "ready"
+    assert result["write"] is False
+
+
+def test_projection_scopes_duplicate_chunk_ids_and_requires_overlap_review(tmp_path: Path) -> None:
+    bundle = _bundle(tmp_path, translated=False)
+    transcript_path = bundle / "normalized-transcript.json"
+    transcript = json.loads(transcript_path.read_text(encoding="utf-8"))
+    transcript["segments"][1].update(
+        {
+            "segment_id": "segment-0001",
+            "source_segment_ids": ["raw-1"],
+            "start": 1.5,
+            "end": 4.5,
+            "speaker_global_id": "speaker-global-001",
+        }
+    )
+    _write_json(transcript_path, transcript)
+
+    projection = build_subtitle_editor_projection(bundle, write=False)
+
+    assert projection["timing_review"]["status"] == "needs_review"
+    assert projection["timing_review"]["overlap_count"] == 1
+    assert [row["segment_id"] for row in projection["segments"]] == [
+        "segment-0001::occurrence-001",
+        "segment-0001::occurrence-002",
+    ]
+    assert [row["source_lineage_ids"][0] for row in projection["segments"]] == [
+        "raw-1::occurrence-001",
+        "raw-1::occurrence-002",
+    ]
+    unresolved = {
+        "schema": "video_knowledge_pipeline.subtitle_review_notes.v1",
+        "projection_sha256": projection["projection_sha256"],
+        "source_sha256": projection["source_sha256"],
+        "segments": projection["segments"],
+        "human_confirmed": True,
+    }
+    with pytest.raises(ValueError, match="invalid or out-of-order timing"):
+        validate_subtitle_review(bundle, unresolved)
+
+    resolved = json.loads(json.dumps(unresolved, ensure_ascii=False))
+    resolved["segments"][0]["end_ms"] = 1500
+    resolved["segments"][1]["start_ms"] = 1500
+    validated = validate_subtitle_review(bundle, resolved)
+    assert validated["ok"] is True
+    assert validated["summary"]["timing_changes"] == 1
+
+    merged = json.loads(json.dumps(unresolved, ensure_ascii=False))
+    merged["segments"] = [
+        {
+            **merged["segments"][0],
+            "segment_id": "human-merge:duplicate-provider-ids",
+            "source_segment_ids": ["raw-1", "raw-1"],
+            "source_lineage_ids": [
+                "raw-1::occurrence-001",
+                "raw-1::occurrence-002",
+            ],
+            "start_ms": 0,
+            "end_ms": 4500,
+        }
+    ]
+    assert validate_subtitle_review(bundle, merged)["ok"] is True
 
 
 def test_apply_writes_reviewed_sidecars_without_mutating_sources(tmp_path: Path) -> None:

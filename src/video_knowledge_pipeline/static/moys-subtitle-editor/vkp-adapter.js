@@ -11,11 +11,6 @@
 
   const originalSegments = Array.isArray(cfg.projection?.segments)
     ? cfg.projection.segments : [];
-  const originalBySource = new Map();
-  originalSegments.forEach((segment) => {
-    (segment.source_segment_ids || []).forEach((id) => originalBySource.set(String(id), segment));
-  });
-
   const draftKey = `vkp:subtitle-editor:${cfg.bundleId}:${cfg.projection.projection_sha256}`;
   let lastDraftJson = '';
   let formallyApplied = false;
@@ -24,9 +19,12 @@
     const sourceIds = Array.isArray(segment.source_segment_ids) && segment.source_segment_ids.length
       ? segment.source_segment_ids.map(String)
       : [String(segment.segment_id || `segment-${index + 1}`)];
+    const lineageIds = Array.isArray(segment.source_lineage_ids) && segment.source_lineage_ids.length
+      ? segment.source_lineage_ids.map(String) : [...sourceIds];
     return {
       segment_id: String(segment.segment_id || `review-${index + 1}`),
       source_segment_ids: sourceIds,
+      source_lineage_ids: lineageIds,
       start_ms: Math.round(Number(segment.start || 0)),
       end_ms: Math.round(Number(segment.end || 0)),
       speaker_global_id: String(segment.speaker_global_id || segment.speaker || ''),
@@ -44,6 +42,7 @@
       evidence_ids: Array.isArray(segment.evidence_ids) ? segment.evidence_ids.map(String) : [],
       disabled: Boolean(segment.disabled),
       needs_translation_review: Boolean(segment.needs_translation_review),
+      timing_status: String(segment.timing_status || 'ready'),
     };
   }
 
@@ -95,6 +94,7 @@
         mandarin_text: segment.mandarin_text || '',
         segment_id: segment.segment_id,
         source_segment_ids: segment.source_segment_ids,
+        source_lineage_ids: segment.source_lineage_ids || segment.source_segment_ids,
         speaker: segment.speaker_global_id || null,
         speaker_global_id: segment.speaker_global_id || '',
         speaker_role: segment.speaker_role || '',
@@ -107,6 +107,7 @@
         })),
         disabled: Boolean(segment.disabled),
         needs_translation_review: Boolean(segment.needs_translation_review),
+        timing_status: String(segment.timing_status || 'ready'),
         _dirty: true,
       }));
       lastDraftJson = raw;
@@ -160,7 +161,9 @@
     bar.className = 'vkp-review-bar';
     bar.innerHTML = `
       <strong>VKP 双轨字幕审核</strong>
-      <span class="vkp-boundary-note">原始 ASR / Timeline 不会被覆盖；静音区与剪辑导出仅生成计划</span>
+      <span class="vkp-boundary-note">${cfg.projection.timing_review?.status === 'needs_review'
+        ? `检测到 ${cfg.projection.timing_review.overlap_count} 处原始时间重叠，必须校正后才能正式写回；`
+        : ''}原始 ASR / Timeline 不会被覆盖；静音区与剪辑导出仅生成计划</span>
       <span class="vkp-spacer"></span>
       <span class="vkp-review-state" id="vkp-review-state" data-state="clean">尚无草稿</span>
       <button type="button" id="vkp-validate-review">校验草稿</button>
@@ -279,6 +282,7 @@
       const source = DATA.segments[index] || {};
       row.segment_id = source.segment_id;
       row.source_segment_ids = source.source_segment_ids || [];
+      row.source_lineage_ids = source.source_lineage_ids || row.source_segment_ids;
       row.mandarin_text = source.mandarin_text || '';
       row.speaker_global_id = source.speaker_global_id || source.speaker || '';
       row.speaker_role = source.speaker_role || '';
@@ -294,6 +298,7 @@
     const index = editingState.idx;
     const before = DATA.segments[index];
     const sourceIds = [...(before.source_segment_ids || [before.segment_id])];
+    const lineageIds = [...(before.source_lineage_ids || sourceIds)];
     const translation = String(before.mandarin_text || '');
     const translationInput = document.getElementById('vkp-mandarin-text');
     const translationCursor = translationInput?.selectionStart ?? 0;
@@ -308,10 +313,13 @@
     right.segment_id = `${before.segment_id || sourceIds[0]}:b`;
     left.source_segment_ids = sourceIds;
     right.source_segment_ids = sourceIds;
+    left.source_lineage_ids = lineageIds;
+    right.source_lineage_ids = lineageIds;
     left.speaker = right.speaker = before.speaker || null;
     left.speaker_global_id = right.speaker_global_id = before.speaker_global_id || before.speaker || '';
     left.speaker_role = right.speaker_role = before.speaker_role || '';
     left.evidence_ids = right.evidence_ids = [...(before.evidence_ids || [])];
+    left.timing_status = right.timing_status = 'human_adjusted';
     if (translation && translationCursor > 0 && translationCursor < translation.length) {
       left.mandarin_text = translation.slice(0, translationCursor).trim();
       right.mandarin_text = translation.slice(translationCursor).trim();
@@ -334,18 +342,33 @@
       flashHint('不同全局说话人的字幕禁止自动合并');
       return;
     }
-    const sourceIds = [...new Set(segments.flatMap((segment) => segment.source_segment_ids || [segment.segment_id]))];
+    const sourceIds = [];
+    const lineageIds = [];
+    const seenLineage = new Set();
+    segments.forEach((segment) => {
+      const segmentSources = segment.source_segment_ids || [segment.segment_id];
+      const segmentLineages = segment.source_lineage_ids || segmentSources;
+      segmentLineages.forEach((lineageId, sourceIndex) => {
+        const lineage = String(lineageId);
+        if (seenLineage.has(lineage)) return;
+        seenLineage.add(lineage);
+        lineageIds.push(lineage);
+        sourceIds.push(String(segmentSources[sourceIndex] || segmentSources[0] || lineage));
+      });
+    });
     const mandarinText = segments.map((segment) => segment.mandarin_text || '').filter(Boolean).join(EDITOR_SETTINGS.mergeJoinText || '');
     const evidenceIds = [...new Set(segments.flatMap((segment) => segment.evidence_ids || []))];
     upstreamMergeSegments(sorted);
     const merged = DATA.segments[sorted[0]];
     if (!merged) return;
-    merged.segment_id = `human-merge:${sourceIds.join('+')}`;
+    merged.segment_id = `human-merge:${lineageIds.join('+')}`;
     merged.source_segment_ids = sourceIds;
+    merged.source_lineage_ids = lineageIds;
     merged.mandarin_text = mandarinText;
     merged.speaker_global_id = segments[0]?.speaker_global_id || segments[0]?.speaker || '';
     merged.speaker_role = segments[0]?.speaker_role || '';
     merged.evidence_ids = evidenceIds;
+    merged.timing_status = 'human_adjusted';
     merged.needs_translation_review = segments.some((segment) => segment.needs_translation_review);
     persistDraft();
     renderAll();
