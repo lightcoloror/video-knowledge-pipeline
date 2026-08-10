@@ -207,6 +207,7 @@ def _build_shot(
         "environment_type": environment[1],
         "edit_role": edit_role[1],
         "composition": composition[1],
+        "lighting": "missing",
         "color_profile": color[1],
         "audio": audio[1],
         "subject_action": "timeline.temporal_visual_understanding" if temporal else "missing",
@@ -214,6 +215,15 @@ def _build_shot(
         "dialogue_or_narration": "timeline.transcript" if transcript else "missing",
         "screen_text": "timeline.visual_text" if visual_text else "missing",
     }
+    for key, field in fact_fields.items():
+        if key not in provenance or not isinstance(field, dict):
+            continue
+        if field.get("status") == "unavailable":
+            continue
+        if field.get("value") in (None, "", [], {}):
+            continue
+        source = str(field.get("source") or "unknown")
+        provenance[key] = f"shot_facts.v1:{source}"
     unknown = [key for key, value in facts.items() if value in ("", "unknown", {}, [])]
     return {
         "shot_id": f"shot-{index:04d}",

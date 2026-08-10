@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -213,6 +214,73 @@ def test_omnishotcut_missing_checkpoint_fails_closed(tmp_path: Path) -> None:
             source_root=source,
             checkpoint_path=tmp_path / "missing.ckpt",
         )
+
+
+def test_runtime_worker_reuses_vkp_media_tool_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    media = tmp_path / "fixture.mp4"
+    media.write_bytes(b"media")
+    source = tmp_path / "autoshot"
+    source.mkdir()
+    checkpoint = tmp_path / "autoshot.pth"
+    checkpoint.write_bytes(b"checkpoint")
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        "video_knowledge_pipeline.shot_boundary_runtime._git_commit",
+        lambda root: "77c82ff826a9301bb173d9be786297a49d73d081",
+    )
+    monkeypatch.setattr(
+        "video_knowledge_pipeline.shot_boundary_runtime.probe_video",
+        lambda path: SimpleNamespace(
+            fps=25.0,
+            duration_seconds=2.0,
+            sha256="media-sha",
+        ),
+    )
+    monkeypatch.setattr(
+        "video_knowledge_pipeline.shot_boundary_runtime.local_tool_subprocess_env",
+        lambda: {
+            "PATH": r"C:\reviewed-ffmpeg",
+            "FFMPEG_BINARY": r"C:\reviewed-ffmpeg\ffmpeg.exe",
+        },
+    )
+
+    def fake_run(command: list[str], **kwargs: object) -> SimpleNamespace:
+        captured["command"] = command
+        captured["env"] = kwargs.get("env")
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "source_format": "autoshot_scenes",
+                    "fps": 25.0,
+                    "scenes": [[0, 24], [25, 49]],
+                }
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr(
+        "video_knowledge_pipeline.shot_boundary_runtime.subprocess.run",
+        fake_run,
+    )
+
+    result = run_shot_boundary_runtime(
+        backend="autoshot",
+        media_path=media,
+        source_root=source,
+        checkpoint_path=checkpoint,
+    )
+
+    assert captured["env"] == {
+        "PATH": r"C:\reviewed-ffmpeg",
+        "FFMPEG_BINARY": r"C:\reviewed-ffmpeg\ffmpeg.exe",
+    }
+    assert result["automatic_fallback"] is False
+    assert result["network_calls"] == 0
 
 
 def test_saved_vfr_predictions_use_exact_frame_timestamps(tmp_path: Path) -> None:

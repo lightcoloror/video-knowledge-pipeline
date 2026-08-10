@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .file_hash import sha256_file
+from .media_tools import local_tool_subprocess_env
 from .path_defaults import dataset_root, source_reviews_root
 from .video import probe_video
 
@@ -101,6 +102,7 @@ def run_shot_boundary_runtime(
         text=True,
         encoding="utf-8",
         errors="replace",
+        env=local_tool_subprocess_env(),
         timeout=max(1.0, float(timeout_seconds)),
         check=False,
     )
@@ -152,7 +154,8 @@ def _existing_checkpoint(
         )
     if not path.is_file():
         raise FileNotFoundError(
-            f"{backend} checkpoint not found: {path}; automatic download is disabled"
+            f"{backend} checkpoint not found: {path}; automatic download is disabled; "
+            "pass --checkpoint-path or configure VKP_DATASET_ROOT"
         )
     return path
 

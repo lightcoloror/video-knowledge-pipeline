@@ -40,6 +40,10 @@ VKP 的拍摄素材路线固定为：
 | `PFV2-011` | 让拉片结果可执行、可交换 | `shot_breakdown.v2` 增加镜头语言统计、转移矩阵、覆盖率、证据完整率；同时输出 JSON、CSV、普通 Markdown 和 Logseq 层级 Markdown | 风格应由统计解释；下游格式不应靠解析超宽表 | 导出回归；Logseq 文件无 `collapsed:: true` | `shot_breakdown.py`、`shot_breakdown_exports.py` |
 | `PFV2-012` | 保证安装后仍能打开审核时间轴 | 将固定 WaveSurfer JS、Regions JS 和许可证声明为 package data | 只在源码树可用不等于安装包可用 | package-data 回归；静态文件 SHA 见下文 | `pyproject.toml`、`static/` |
 | `PFV2-013` | 保留 VFR 与分块边界的真实时间 | 已保存预测可携带逐帧 `frame_timestamps_seconds` 与 `time_offset_seconds`；重叠窗口仍交两帧容差融合并保持人工选择 | 用平均 FPS 推导 VFR 或忽略 chunk offset 会让边界漂移；重叠窗口不能直接重复写入 | 精确 VFR 映射、偏移 300 秒、时间戳缺口 fail-closed 和重叠窗口聚合回归 | `technical_shot_detection.py`、`technical_shot_fusion.py` |
+| `PFV2-014` | 让固定上游能找到 VKP 已登记的 FFmpeg | AutoShot/OmniShotCut 隔离 worker 复用 `local_tool_subprocess_env()`，只向子进程传递解析后的媒体工具目录 | AutoShot 的 `ffmpeg-python` 只寻找命令名；VKP 能解析 FFmpeg，但此前未传给 worker | 真实 AutoShot 运行先在 `get_frames()` 报 WinError 2；新增子进程环境回归 | `shot_boundary_runtime.py` |
+| `PFV2-015` | 避免稀疏课程帧冒充逐镜头代表帧 | 执行镜头语言时校验 `technical_shot_boundaries.v1.media` 的精确 SHA，并复用 `extract_segment_frames` 和 temporal 等距采样，为每个技术镜头抽起/中/末三帧 | WebUI 时间轴可能只保留一张课程证据帧，不能覆盖所有摄影机镜头 | 12 秒四镜头合成片真实生成 12 张帧、4 份联系表；媒体哈希/三帧回归通过 | `shot_language_analysis.py`、`video.py`、`temporal_frame_groups.py` |
+| `PFV2-016` | 兼容真实 WebUI Bundle 帧合同 | 镜头语言同时读取 `frame_paths`、`temporal_frame_paths`、temporal group 和受 Bundle 根约束的 `assets[].path`；拒绝 `assets[].source` 外部路径 | 正式 Bundle 使用 copied asset 投影，而旧单元测试只覆盖 `frame_paths` | 真实规范 Bundle 暴露空帧问题；新增仅含 `assets[].path` 的回归 | `shot_language_analysis.py`、`webui_bridge.py` |
+| `PFV2-017` | 防止拉片报告把已有模型证据显示为 missing | `field_provenance` 对非 unavailable 的 `shot_facts.v1` 字段记录其原始 source | Workbench 必须区分“无证据”和“有光流候选” | 实测 camera_movement 有 `frame:*` 证据但 provenance 为 missing；新增结构化事实回归 | `shot_breakdown.py` |
 
 ## 固定上游与复现状态
 
@@ -86,3 +90,20 @@ WaveSurfer 固定资产：
 - 尚未完成三条用户域视频的完整拉片生产验收和“人工复核节省 ≥30%”计时。
 
 这些缺口会保持 `candidate/runtime_pending`，不能因代码入口存在而标记为生产可用。
+
+## 2026-08-08 本地生产链增量验收
+
+- 执行工具/模型：Codex / GPT-5.6
+- 记录时间：2026-08-08 17:19:04 +08:00
+- 意图：从“合同和测试存在”推进到“本地媒体能真正生成逐镜头派生产物”。
+- 决策：先对用户域拍摄课程运行 AutoShot；外置盘硬件失败后停止访问 E 盘，改用 12 秒无敏感合成片验证 PySceneDetect、逐镜头抽帧、Auto Scenes 光流、拉片报告和 filmed-v1 结构。
+- 理由：真实硬件/文件系统故障不能伪装成模型失败，也不能通过反复读盘扩大风险；合成片只验证执行合同，不替代真实质量评测。
+- 证据：
+  - E 盘权重和视频均返回 Windows `WinError 483` / “设备硬件出现致命错误”；AutoShot 没有完成模型加载，不能记为 GPU 质量失败。
+  - 合成片 SHA-256：`5dc2a332b1925b9036c15801d9a1289507a3d5950fba1854fc7a2a60f0fb2097`。
+  - PySceneDetect 严格路线在 `3/6/9` 秒生成 3 个边界、4 个技术镜头，无 fallback。
+  - `shot_facts.v1` 对 4 个镜头生成逐镜头帧；静态镜头为 `static`，动态测试图为低置信 `tracking=0.5267` 并保留 missing-evidence 门。
+  - `shot_breakdown.v2` 参考帧门和运镜门已通过；`video_structure.v1` 从 blocked 推进为 degraded，明确剩余 BGE-M3、DINO 景别、本地故事证据和 Lighthouse 权重缺口。
+  - 拉片专项回归 `40 passed`，`compileall` 与定向 Ruff 通过；完整 pytest 运行超过约 9 分钟仍无终态输出后被人工终止，未出现断言失败，但不能记为完整回归通过。
+- 生效范围：拉片本地执行和派生证据；不修改 Timeline、canonical transcript、原始媒体或 provider gateway。
+- 回滚：撤销 `PFV2-014` 至 `PFV2-017` 对应源码提交并重新生成派生产物；原始 Bundle/媒体无需回滚。

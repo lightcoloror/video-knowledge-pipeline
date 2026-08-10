@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .file_hash import sha256_file
-from .models import now_iso
+from .models import EvidenceSegment, now_iso
 from .scene_taxonomy import normalize_taxonomy_value
 from .shot_language_auto_scenes import (
     AUTO_SCENES_COMMIT,
@@ -12,7 +12,9 @@ from .shot_language_auto_scenes import (
 )
 from .storage import bundle_write_lock, read_json, write_json
 from .technical_shot_detection import load_verified_technical_shots
+from .temporal_frame_groups import _sample_times
 from .transcript import format_timestamp
+from .video import extract_segment_frames
 
 
 SCHEMA = "video_knowledge_pipeline.shot_facts.v1"
@@ -49,6 +51,7 @@ def run_shot_language_analysis(
     write: bool = True,
     _shot_type_analyzer: Callable[[str], dict[str, Any]] | None = None,
     _movement_analyzer: Callable[[list[str]], dict[str, Any]] | None = None,
+    _frame_extractor: Callable[..., None] | None = None,
 ) -> dict[str, Any]:
     """Build evidence-bound shot facts without implicit model fallback."""
 
@@ -67,6 +70,11 @@ def run_shot_language_analysis(
 
     timeline = _read_list(root / "timeline.json")
     review_corrections, review_provenance = _load_review_corrections(root, provenance)
+    media, media_provenance = (
+        _verified_detection_media(provenance)
+        if execute
+        else (None, {"status": "not_checked", "reason": "execute_false"})
+    )
     runtime = None
     errors: dict[str, str] = {}
     if execute and (_shot_type_analyzer is None or _movement_analyzer is None):
@@ -86,6 +94,21 @@ def run_shot_language_analysis(
         end = float(shot.get("end") or 0.0)
         rows = [row for row in timeline if _overlaps(row, start, end)]
         frames = _frame_paths(root, rows)
+        if execute and write and media is not None:
+            try:
+                extracted = _extract_technical_shot_frames(
+                    root,
+                    media,
+                    shot_id=shot_id,
+                    start=start,
+                    end=end,
+                    extractor=_frame_extractor or extract_segment_frames,
+                )
+                frames = _unique_paths([*extracted, *frames])
+            except Exception as exc:
+                errors[f"{shot_id}:frame_extraction"] = (
+                    f"{type(exc).__name__}: {exc}"
+                )
         evidence_ids = _evidence_ids(rows, frames)
         prepared = _prepare_frames(root, shot_id, frames, write=write)
 
@@ -197,6 +220,7 @@ def run_shot_language_analysis(
         "route_id": str(route_id or ""),
         "execute": bool(execute),
         "technical_shot_provenance": provenance,
+        "media_provenance": media_provenance,
         "shot_review_provenance": review_provenance,
         "shot_count": len(rows_out),
         "shots": rows_out,
@@ -224,6 +248,9 @@ def run_shot_language_analysis(
             "no_automatic_local_vlm_execution": True,
             "no_remote_fallback": True,
             "timeline_mutated": False,
+            "technical_media_hash_verified": (
+                media_provenance.get("status") == "verified"
+            ),
         },
         "artifacts": {"json": OUTPUT_PATH, "markdown": MARKDOWN_PATH},
         "updated_at": now_iso(),
@@ -501,6 +528,93 @@ def _field(
     }
 
 
+def _verified_detection_media(
+    technical_provenance: dict[str, Any],
+) -> tuple[Path | None, dict[str, Any]]:
+    raw_artifact = str(technical_provenance.get("path") or "").strip()
+    if not raw_artifact:
+        return None, {"status": "not_bound"}
+    artifact = Path(raw_artifact).expanduser().resolve()
+    if not artifact.is_file():
+        return None, {"status": "technical_artifact_missing", "path": str(artifact)}
+    payload = read_json(artifact)
+    media = payload.get("media") if isinstance(payload, dict) else None
+    if not isinstance(media, dict):
+        return None, {"status": "not_bound"}
+    raw_media = str(media.get("path") or "").strip()
+    expected = str(media.get("sha256") or "").strip().lower()
+    if not raw_media or not expected:
+        return None, {"status": "not_bound"}
+    try:
+        path = Path(raw_media).expanduser().resolve()
+        if not path.is_file():
+            return None, {"status": "media_missing", "path": str(path)}
+        actual = sha256_file(path).lower()
+    except OSError as exc:
+        return None, {
+            "status": "media_io_error",
+            "path": raw_media,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+    if actual != expected:
+        return None, {
+            "status": "media_hash_mismatch",
+            "path": str(path),
+            "expected_sha256": expected,
+            "actual_sha256": actual,
+        }
+    return path, {
+        "status": "verified",
+        "path": str(path),
+        "sha256": actual,
+        "source": "technical_shot_boundaries.v1.media",
+    }
+
+
+def _extract_technical_shot_frames(
+    root: Path,
+    media: Path,
+    *,
+    shot_id: str,
+    start: float,
+    end: float,
+    extractor: Callable[..., None],
+) -> list[str]:
+    duration = max(0.0, end - start)
+    inset = min(0.12, duration / 4.0)
+    sample_start = min(end, start + inset)
+    sample_end = max(sample_start, end - inset)
+    times = _sample_times(sample_start, sample_end, 3)
+    segments = [
+        EvidenceSegment(
+            id=f"{shot_id}-representative-{index:02d}",
+            video_id="technical-shot-media",
+            start=start,
+            end=end,
+            midpoint=seconds,
+            signals=["technical_shot_representative"],
+        )
+        for index, seconds in enumerate(times, start=1)
+    ]
+    extractor(
+        media,
+        root / "exports" / "shot-language" / shot_id / "source-frames",
+        segments,
+    )
+    return _unique_paths(
+        [path for segment in segments for path in segment.frame_paths]
+    )
+
+
+def _unique_paths(values: list[str]) -> list[str]:
+    result: list[str] = []
+    for value in values:
+        text = str(value or "").strip()
+        if text and text not in result:
+            result.append(text)
+    return result
+
+
 def _prepare_frames(
     root: Path,
     shot_id: str,
@@ -572,7 +686,15 @@ def _basic_frame_manifest(source_paths: list[str]) -> list[dict[str, Any]]:
 def _frame_paths(root: Path, rows: list[dict[str, Any]]) -> list[str]:
     result: list[str] = []
     for row in rows:
-        for value in row.get("frame_paths") or []:
+        values = _path_values(row.get("frame_paths"))
+        values.extend(_path_values(row.get("temporal_frame_paths")))
+        temporal_group = row.get("temporal_frame_group")
+        if isinstance(temporal_group, dict):
+            values.extend(_path_values(temporal_group.get("frame_paths")))
+        for asset in row.get("assets") or []:
+            if isinstance(asset, dict) and asset.get("path"):
+                values.append(str(asset["path"]))
+        for value in values:
             path = Path(str(value)).expanduser()
             if not path.is_absolute():
                 path = root / path
@@ -584,6 +706,16 @@ def _frame_paths(root: Path, rows: list[dict[str, Any]]) -> list[str]:
             if path.is_file() and str(path) not in result:
                 result.append(str(path))
     return result
+
+
+def _path_values(value: Any) -> list[str]:
+    if value in (None, ""):
+        return []
+    if isinstance(value, (str, Path)):
+        return [str(value)]
+    if isinstance(value, list):
+        return [str(item) for item in value if item not in (None, "")]
+    return []
 
 
 def _evidence_ids(

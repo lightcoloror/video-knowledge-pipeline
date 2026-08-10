@@ -116,6 +116,40 @@ def test_shot_breakdown_preserves_unknowns_and_blocks_generation_readiness(tmp_p
     assert result["imitation_script"]["shots"][0]["human_confirmed"] is False
 
 
+def test_shot_breakdown_marks_structured_shot_fact_provenance(tmp_path: Path) -> None:
+    bundle = _bundle(tmp_path)
+    _write_json(
+        bundle / "exports" / "shot-facts.json",
+        {
+            "schema": "video_knowledge_pipeline.shot_facts.v1",
+            "shot_count": 2,
+            "shots": [
+                {
+                    "index": 1,
+                    "fields": {
+                        "camera_movement": {
+                            "value": "static",
+                            "status": "inferred",
+                            "confidence": 0.9,
+                            "evidence_ids": ["frame:fixture"],
+                            "source": "auto_scenes.optical_flow_analyzer",
+                            "missing_evidence": [],
+                        }
+                    },
+                }
+            ],
+        },
+    )
+
+    result = build_shot_breakdown(bundle, write=False)
+
+    shot = result["shots"][0]
+    assert shot["facts"]["camera_movement"] == "static"
+    assert shot["field_provenance"]["camera_movement"] == (
+        "shot_facts.v1:auto_scenes.optical_flow_analyzer"
+    )
+
+
 def test_shot_breakdown_cli_mcp_args_and_workbench_surface(tmp_path: Path) -> None:
     bundle = _bundle(tmp_path)
 

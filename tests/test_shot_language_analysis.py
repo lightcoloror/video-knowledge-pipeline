@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from video_knowledge_pipeline.file_hash import sha256_file
 from video_knowledge_pipeline.shot_language_analysis import (
     SCHEMA,
     run_shot_language_analysis,
@@ -139,6 +140,130 @@ def test_no_execute_never_claims_model_fields(tmp_path: Path) -> None:
     assert fields["shot_type"]["value"] is None
     assert fields["camera_movement"]["status"] == "unavailable"
     assert result["runtime_errors"] == {}
+
+
+def test_webui_asset_paths_are_reused_as_shot_frame_evidence(
+    tmp_path: Path,
+) -> None:
+    root = _bundle(tmp_path)
+    copied = root / "assets" / "0001-frame.jpg"
+    copied.parent.mkdir(parents=True)
+    copied.write_bytes(b"copied-frame")
+    timeline = json.loads((root / "timeline.json").read_text(encoding="utf-8"))
+    timeline[0].pop("frame_paths", None)
+    timeline[0]["assets"] = [
+        {
+            "path": "assets/0001-frame.jpg",
+            "source": r"C:\outside-bundle\original-frame.jpg",
+            "copied": "true",
+        }
+    ]
+    _write_json(root / "timeline.json", timeline)
+
+    result = run_shot_language_analysis(
+        root,
+        execute=True,
+        write=False,
+        _shot_type_analyzer=lambda path: {
+            "shot_type": "medium",
+            "confidence": 0.9,
+        },
+        _movement_analyzer=lambda paths: {
+            "camera_movement": "static",
+            "confidence": 0.9,
+        },
+    )
+
+    shot = result["shots"][0]
+    assert [row["source_path"] for row in shot["frame_manifest"]] == [
+        str(copied.resolve())
+    ]
+    assert shot["fields"]["reference_frames"]["status"] == "confirmed"
+    assert shot["fields"]["shot_type"]["evidence_ids"]
+    assert all(
+        "outside-bundle" not in row["source_path"]
+        for row in shot["frame_manifest"]
+    )
+
+
+def test_execute_extracts_three_frames_from_hash_bound_technical_media(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    root = _bundle(tmp_path)
+    media = root / "media.mp4"
+    media.write_bytes(b"hash-bound-media")
+    boundary_path = root / "exports" / "technical-shot-boundaries.json"
+    boundaries = json.loads(boundary_path.read_text(encoding="utf-8"))
+    boundaries["media"] = {
+        "status": "bound",
+        "path": str(media),
+        "sha256": sha256_file(media),
+    }
+    _write_json(boundary_path, boundaries)
+    timeline = json.loads((root / "timeline.json").read_text(encoding="utf-8"))
+    timeline[0].pop("frame_paths", None)
+    _write_json(root / "timeline.json", timeline)
+
+    def fake_extract(media_path, output_dir, segments) -> None:
+        output = Path(output_dir)
+        output.mkdir(parents=True, exist_ok=True)
+        for index, segment in enumerate(segments, start=1):
+            frame = output / f"{index:03d}.jpg"
+            frame.write_bytes(f"frame-{index}".encode())
+            segment.frame_paths.append(str(frame))
+
+    def fake_prepare(frames, **kwargs):
+        manifest = [
+            {
+                "frame_id": f"F{index:02d}",
+                "source_index": index,
+                "filename": Path(path).name,
+                "source_path": str(path),
+                "timestamp_ms": None,
+                "timestamp": "",
+                "bytes": Path(path).stat().st_size,
+            }
+            for index, path in enumerate(frames, start=1)
+        ]
+        return {
+            "frame_manifest": manifest,
+            "frame_mapping": [
+                {
+                    "frame_id": row["frame_id"],
+                    "source_index": row["source_index"],
+                    "representative_frame_id": row["frame_id"],
+                }
+                for row in manifest
+            ],
+            "prepared_image_paths": list(frames),
+            "contact_sheet_path": "",
+        }
+
+    monkeypatch.setattr(
+        "video_knowledge_pipeline.temporal_frame_preprocess.prepare_temporal_image_probe",
+        fake_prepare,
+    )
+
+    result = run_shot_language_analysis(
+        root,
+        execute=True,
+        write=True,
+        _frame_extractor=fake_extract,
+        _shot_type_analyzer=lambda path: {
+            "shot_type": "medium",
+            "confidence": 0.9,
+        },
+        _movement_analyzer=lambda paths: {
+            "camera_movement": "static",
+            "confidence": 0.9,
+        },
+    )
+
+    assert result["media_provenance"]["status"] == "verified"
+    assert result["operator_boundary"]["technical_media_hash_verified"] is True
+    assert len(result["shots"][0]["frame_manifest"]) == 3
+    assert result["shots"][0]["fields"]["reference_frames"]["status"] == "confirmed"
 
 
 def test_shot_facts_block_without_verified_technical_shots(
