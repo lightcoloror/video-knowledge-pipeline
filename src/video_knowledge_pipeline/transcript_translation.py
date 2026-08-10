@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Evidence-preserving transcript translation sidecar.
 
 Change rationale
@@ -18,6 +16,8 @@ no remote route, provider SDK, audio upload, or source transcript mutation.
 Rollback: remove this module and CLI registration; existing transcript files
 and bundle manifests remain valid because the new fields are additive.
 """
+
+from __future__ import annotations
 
 import json
 import re
@@ -90,6 +90,12 @@ def translate_transcript_to_mandarin(
     if write:
         write_json(plan_path, plan)
 
+    # Intent: keep reviewed import files inside the same evidence chain as
+    # model-produced translations. Decision: require both the source SHA-256
+    # and every segment_id before accepting any imported row. Reason: index-only
+    # imports can silently attach text to a revised transcript. Evidence: the
+    # synthetic lineage-drift fixture is rejected. Scope: input_json only;
+    # locally generated checkpoints already enforce the same binding.
     imported = (
         _load_imported_translations(
             input_json,
@@ -111,7 +117,13 @@ def translate_transcript_to_mandarin(
         for batch_index, batch in enumerate(batches):
             missing = [row for row in batch if row["index"] not in translated]
             if not missing:
-                batch_results.append({"batch_index": batch_index, "status": "reused", "segment_count": len(batch)})
+                batch_results.append(
+                    {
+                        "batch_index": batch_index,
+                        "status": "reused",
+                        "segment_count": len(batch),
+                    }
+                )
                 continue
             if direct_lmstudio:
                 # Intent: execute the reviewed local-production builtin route
@@ -130,7 +142,9 @@ def translate_transcript_to_mandarin(
                         "base_url": "http://127.0.0.1:1234/v1",
                         "model": "qwen/qwen3.5-9b",
                         "timeout_seconds": 300,
-                        "extra_body": {"chat_template_kwargs": {"enable_thinking": False}},
+                        "extra_body": {
+                            "chat_template_kwargs": {"enable_thinking": False}
+                        },
                     },
                     messages=_translation_messages(missing),
                     temperature=0,
@@ -165,7 +179,9 @@ def translate_transcript_to_mandarin(
                     {
                         "batch_index": batch_index,
                         "status": str(result.get("status") or "failed"),
-                        "error": str(result.get("error") or "local model translation failed"),
+                        "error": str(
+                            result.get("error") or "local model translation failed"
+                        ),
                     }
                 )
                 continue
@@ -208,10 +224,25 @@ def translate_transcript_to_mandarin(
                     }
                 )
             except ValueError as exc:
-                batch_results.append({"batch_index": batch_index, "status": "invalid_output", "error": str(exc)})
+                batch_results.append(
+                    {
+                        "batch_index": batch_index,
+                        "status": "invalid_output",
+                        "error": str(exc),
+                    }
+                )
 
     complete = len(rows) > 0 and len(translated) == len(rows)
-    status = "completed" if complete else ("degraded" if translated or (execute and batch_results) else "planned")
+    # Intent: expose attempted-but-invalid execution to callers. Decision:
+    # return degraded whenever an executed batch failed or was rejected, even
+    # when no translation row survived. Reason: planned would hide a real
+    # attempt as if it never ran. Evidence: the wrong-segment model fixture.
+    # Scope: incomplete executed runs only; dry plans remain planned.
+    status = (
+        "completed"
+        if complete
+        else ("degraded" if translated or (execute and batch_results) else "planned")
+    )
     output_json = root / "mandarin-translated-transcript.json"
     output_srt = root / "mandarin-translated-subtitles.srt"
     payload: dict[str, Any] = {
@@ -223,7 +254,9 @@ def translate_transcript_to_mandarin(
         "target_language": "zh-CN",
         "segment_count": len(rows),
         "translated_segment_count": len(translated),
-        "missing_segment_indexes": [row["index"] for row in rows if row["index"] not in translated],
+        "missing_segment_indexes": [
+            row["index"] for row in rows if row["index"] not in translated
+        ],
         "segments": _translated_segments(cues, translated),
         "batch_results": batch_results,
         "operator_boundary": plan["operator_boundary"],
@@ -272,15 +305,28 @@ def _resolve_source(root: Path, source_path: str | Path | None) -> Path:
         return candidate
     manifest_path = root / "manifest.json"
     manifest = read_json(manifest_path) if manifest_path.exists() else {}
-    for key in ("corrected_transcript_json", "readable_transcript_json", "normalized_transcript_json", "transcript_json"):
-        value = str((manifest or {}).get(key) or "").strip() if isinstance(manifest, dict) else ""
+    for key in (
+        "corrected_transcript_json",
+        "readable_transcript_json",
+        "normalized_transcript_json",
+        "transcript_json",
+    ):
+        value = (
+            str((manifest or {}).get(key) or "").strip()
+            if isinstance(manifest, dict)
+            else ""
+        )
         if value:
             candidate = Path(value)
             if not candidate.is_absolute():
                 candidate = root / candidate
             if candidate.is_file():
                 return candidate.resolve()
-    for name in ("corrected-transcript.json", "readable-transcript.json", "normalized-transcript.json"):
+    for name in (
+        "corrected-transcript.json",
+        "readable-transcript.json",
+        "normalized-transcript.json",
+    ):
         candidate = root / name
         if candidate.is_file():
             return candidate.resolve()
@@ -300,16 +346,21 @@ def _translation_messages(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         "把粤语口语逐段翻译成自然、忠实的简体中文普通话字幕。"
         "只转换表达方式，不核查或改写事实，不补充原文没有的信息。"
         "专名、数字和不确定词按听到的原文保留；不要合并、拆分或重排段落。"
-        "只输出 JSON 对象：{\"translations\":[{\"index\":0,\"segment_id\":\"...\",\"text\":\"...\"}]}。"
+        '只输出 JSON 对象：{"translations":[{"index":0,"segment_id":"...","text":"..."}]}。'
         "index 和 segment_id 必须逐项原样复制。"
     )
     return [
         {"role": "system", "content": instruction},
-        {"role": "user", "content": json.dumps(rows, ensure_ascii=False, separators=(",", ":"))},
+        {
+            "role": "user",
+            "content": json.dumps(rows, ensure_ascii=False, separators=(",", ":")),
+        },
     ]
 
 
-def _parse_translation_content(content: Any, expected: list[dict[str, Any]]) -> dict[int, str]:
+def _parse_translation_content(
+    content: Any, expected: list[dict[str, Any]]
+) -> dict[int, str]:
     if isinstance(content, dict):
         data = content
     else:
@@ -342,7 +393,9 @@ def _parse_translation_content(content: Any, expected: list[dict[str, Any]]) -> 
             raise ValueError(f"duplicate translation index {index}")
         parsed[index] = text
     if set(parsed) != set(expected_by_index):
-        raise ValueError("translation response does not cover the exact requested indexes")
+        raise ValueError(
+            "translation response does not cover the exact requested indexes"
+        )
     return parsed
 
 
@@ -354,8 +407,13 @@ def _load_imported_translations(
 ) -> dict[int, str]:
     path = Path(path_value).expanduser().resolve()
     data = read_json(path)
-    if not isinstance(data, dict) or str(data.get("source_sha256") or "") != source_sha256:
-        raise ValueError("imported translation source hash does not match the selected transcript")
+    if (
+        not isinstance(data, dict)
+        or str(data.get("source_sha256") or "") != source_sha256
+    ):
+        raise ValueError(
+            "imported translation source hash does not match the selected transcript"
+        )
     items = data.get("translations")
     if not isinstance(items, list):
         raise ValueError("imported translation JSON must contain translations[]")
@@ -389,7 +447,10 @@ def _load_checkpoint(
     if not path.is_file():
         return {}
     data = read_json(path)
-    if not isinstance(data, dict) or str(data.get("source_sha256") or "") != source_sha256:
+    if (
+        not isinstance(data, dict)
+        or str(data.get("source_sha256") or "") != source_sha256
+    ):
         return {}
     items = data.get("translations")
     if not isinstance(items, list):
@@ -405,13 +466,20 @@ def _load_checkpoint(
             return {}
         segment_id = str(item.get("segment_id") or "")
         text = str(item.get("text") or "").strip()
-        if index not in expected or segment_id != expected[index] or not text or index in result:
+        if (
+            index not in expected
+            or segment_id != expected[index]
+            or not text
+            or index in result
+        ):
             return {}
         result[index] = text
     return result
 
 
-def _translated_cues(cues: list[TranscriptCue], translated: dict[int, str]) -> list[TranscriptCue]:
+def _translated_cues(
+    cues: list[TranscriptCue], translated: dict[int, str]
+) -> list[TranscriptCue]:
     return [
         TranscriptCue(
             start=cue.start,
@@ -423,13 +491,19 @@ def _translated_cues(cues: list[TranscriptCue], translated: dict[int, str]) -> l
             + [{"type": "yue_to_mandarin_translation", "boundary_changed": False}],
             speaker=cue_speaker(cue),
             speaker_role=cue_speaker_role(cue),
-            metadata={**dict(cue.metadata), "source_text": cue.text, "derived_translation": True},
+            metadata={
+                **dict(cue.metadata),
+                "source_text": cue.text,
+                "derived_translation": True,
+            },
         )
         for index, cue in enumerate(cues)
     ]
 
 
-def _translated_segments(cues: list[TranscriptCue], translated: dict[int, str]) -> list[dict[str, Any]]:
+def _translated_segments(
+    cues: list[TranscriptCue], translated: dict[int, str]
+) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for index, cue in enumerate(cues):
         if index not in translated:
