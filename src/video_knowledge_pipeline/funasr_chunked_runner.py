@@ -19,6 +19,12 @@ from .audio_chunk_manifest import (
 )
 from .local_media_progress import LocalMediaProgress, stderr_progress_callback
 from .qwen3_asr_python_runner import _audio_chunks
+from .speaker_global_alignment import (
+    DEFAULT_OVERLAP_AGREEMENT_THRESHOLD,
+    DEFAULT_SIMILARITY_THRESHOLD,
+    align_chunk_speaker_records,
+    write_alignment_artifacts,
+)
 from .storage import read_json, write_json
 
 
@@ -37,6 +43,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--spk-model", default="")
     parser.add_argument("--speaker-merge-threshold", type=float)
     parser.add_argument("--preset-speaker-count", type=int)
+    parser.add_argument(
+        "--speaker-global-threshold",
+        type=float,
+        default=DEFAULT_SIMILARITY_THRESHOLD,
+        help="FunASR-compatible cosine threshold for chunk-global anonymous IDs",
+    )
     parser.add_argument("--language", default="zh")
     parser.add_argument("--hotword", default="")
     parser.add_argument("--batch-size-s", type=int, default=60)
@@ -73,6 +85,7 @@ def main(argv: list[str] | None = None) -> int:
         spk_model=args.spk_model,
         speaker_merge_threshold=args.speaker_merge_threshold,
         preset_speaker_count=args.preset_speaker_count,
+        speaker_global_threshold=args.speaker_global_threshold,
         language=args.language,
         hotword=args.hotword,
         batch_size_s=args.batch_size_s,
@@ -173,6 +186,7 @@ def run_funasr_chunked(
     spk_model: str = "",
     speaker_merge_threshold: float | None = None,
     preset_speaker_count: int | None = None,
+    speaker_global_threshold: float = DEFAULT_SIMILARITY_THRESHOLD,
     language: str = "zh",
     hotword: str = "",
     batch_size_s: int = 60,
@@ -202,6 +216,8 @@ def run_funasr_chunked(
     output.parent.mkdir(parents=True, exist_ok=True)
     chunk_seconds = max(30, int(chunk_seconds or 300))
     chunk_overlap_seconds = float(chunk_overlap_seconds or 0.0)
+    if not 0.0 < float(speaker_global_threshold) <= 1.0:
+        raise ValueError("speaker_global_threshold must be in (0, 1]")
     checkpoint_path = output.with_name(f"{output.stem}-checkpoint.json")
     report_path = output.with_name(f"{output.stem}-chunk-report.json")
     chunks_dir = output.with_name(f"{output.stem}-chunks")
@@ -312,6 +328,7 @@ def run_funasr_chunked(
         spk_model=spk_model,
         speaker_merge_threshold=speaker_merge_threshold,
         preset_speaker_count=preset_speaker_count,
+        speaker_global_threshold=speaker_global_threshold,
         language=language,
         hotword=hotword,
         batch_size_s=batch_size_s,
@@ -538,8 +555,40 @@ def run_funasr_chunked(
             else ("degraded" if results else "failed")
         )
     )
+    aligned_results = results
+    speaker_global_alignment: dict[str, Any] = {
+        "schema": "video_knowledge_pipeline.speaker_global_alignment.v1",
+        "status": "not_requested" if not spk_model else "unavailable",
+        "candidate_only": True,
+        "privacy": {
+            "anonymous_ids_only": True,
+            "person_identity_inferred": False,
+            "embedding_vectors_in_public_artifact": False,
+        },
+    }
+    if spk_model:
+        # Intent: turn chunk-local CAM++ labels into recording-global anonymous IDs.
+        # Decision: adapt FunASR HybridSpeakerTracker after successful chunks are
+        # collected and before canonical overlap ownership is selected.
+        # Reason: every isolated child starts its labels again at zero, which made
+        # one real person appear as several speakers in long recordings.
+        # Evidence: the pinned upstream mapping and VKP overlap LocalAgreement are
+        # both already source-reviewed and tested.
+        # Effective scope: candidate ``speaker_global_id`` plus a local-private
+        # centroid sidecar. Text, local ``spk``, roles and identities do not change.
+        aligned_results, public_alignment, private_alignment = align_chunk_speaker_records(
+            results,
+            similarity_threshold=speaker_global_threshold,
+            overlap_agreement_threshold=DEFAULT_OVERLAP_AGREEMENT_THRESHOLD,
+        )
+        speaker_global_alignment = write_alignment_artifacts(
+            output,
+            public_alignment,
+            private_alignment,
+            write=True,
+        )
     canonical_result, overlap_merge = _canonicalize_overlap_records(
-        results,
+        aligned_results,
         chunk_manifest,
     )
     runtime_metrics = _chunk_runtime_summary(chunks_dir, successful_indexes)
@@ -555,6 +604,7 @@ def run_funasr_chunked(
         "model": model,
         "speaker_merge_threshold": speaker_merge_threshold,
         "preset_speaker_count": preset_speaker_count,
+        "speaker_global_threshold": float(speaker_global_threshold),
         "input": str(media),
         "duration_seconds": float(chunk_manifest["source"]["duration_seconds"]),
         "device": device,
@@ -572,6 +622,7 @@ def run_funasr_chunked(
         "unresolved_chunk_indexes": unresolved_indexes,
         "quality_status": quality_status,
         "overlap_merge": overlap_merge,
+        "speaker_global_alignment": speaker_global_alignment,
         "runtime_metrics": runtime_metrics,
         "checkpoint_path": str(checkpoint_path),
         "chunk_directory": str(chunks_dir),
@@ -588,7 +639,7 @@ def run_funasr_chunked(
         "gaps": [{"chunk_index": row["chunk_index"], "start": row["start"], "end": row["end"], "reason": row["reason"]} for row in failures],
         "retry_commands": [row["retry_command"] for row in failures],
         "result": canonical_result,
-        "chunk_results": results,
+        "chunk_results": _public_chunk_results(aligned_results),
         "status": status,
         "ok": status in {"completed", "partial_targeted_completed"},
         "usable": bool(results),
@@ -961,7 +1012,31 @@ def _sentence_time_seconds(row: dict[str, Any]) -> tuple[float, float]:
     return start_ms / 1000.0, max(start_ms, end_ms) / 1000.0
 
 def _strip_chunk_metadata(record: dict[str, Any]) -> dict[str, Any]:
-    return {key: value for key, value in record.items() if key not in {"chunk_index", "record_index"}}
+    return {
+        key: value
+        for key, value in record.items()
+        if key
+        not in {
+            "chunk_index",
+            "record_index",
+            "_speaker_embedding_centers",
+        }
+    }
+
+
+def _public_chunk_results(
+    records: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Strip biometric vectors while retaining anonymous mapping evidence."""
+
+    return [
+        {
+            key: value
+            for key, value in record.items()
+            if key != "_speaker_embedding_centers"
+        }
+        for record in records
+    ]
 
 
 def _parent_retry_command(
@@ -1059,7 +1134,7 @@ def _execution_contract_revision(**values: Any) -> str:
     payload["hotword"] = canonical_json_sha256(str(values.get("hotword") or ""))
     return canonical_json_sha256(
         {
-            "runner_contract": "funasr_python_runner.sentence_timestamps.v2",
+            "runner_contract": "funasr_python_runner.sentence_timestamps_and_speaker_centers.v3",
             **payload,
         }
     )

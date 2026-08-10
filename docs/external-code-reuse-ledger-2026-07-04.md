@@ -2001,3 +2001,15 @@ At the time recorded above, every untracked `src/video_knowledge_pipeline/*.py` 
 | 上游模块 | 固定版本 | 状态 | 意图 / 决策 / 理由 / 证据 / 生效范围 / 回滚 |
 | --- | --- | --- | --- |
 | lightcoloror/model-provider-gateway | `c5f3ec49644453e0cddb56350e3b243b49e0f7da` / AGPL-3.0-only | **public shared canonical text/vision execution / VKP owner-gated request adapter implemented** | 意图：让研究、写作、视频生成与 VKP 复用审核 Provider preset、route/consent、LiteLLM execution request/result 和脱敏审计；决策：VKP 只增加 optional extra、精确 profile/route 投影和 Broker receipt 绑定的 request builder，不解析 secret、不直接执行 Provider；理由：不能复制第二套网关状态机，也不能让共享执行层绕过 VKP business authorization/Broker；证据：共享项目 53/53 双跑、LiteLLM text/vision loopback、build/脱敏扫描，VKP 10/10 focused 回归；生效范围：可选 text/vision 请求投影，ASR/OCR 仍由 VKP 持有且共享 Wave 1 blocked；回滚：移除 optional extra 与薄适配器，原 VKP 网关不变。详细记录：`docs/model-provider-gateway-adapter-2026-08-05.md`。 |
+
+## 2026-08-10 分块全局说话人与跨视频匿名声纹候选
+
+更新时间：2026-08-10 16:23:22 +08:00 | Codex / GPT-5.6 Sol
+
+| 上游/既有模块 | 固定版本 | 状态 | 意图 / 决策 / 理由 / 证据 / 生效范围 / 回滚 |
+| --- | --- | --- | --- |
+| FunASR `HybridSpeakerTracker._map_cluster_centers` + `return_spk_center` | `1.3.30` / `16cd165ac3946cc8c08bf845331f91fefec8e1a9` | **tested mapping contract adapted / implemented** | 意图：把各 ASR 分块临时 CAM++ 簇映射成录音级稳定匿名 ID；决策：薄适配归一化余弦、同窗 `used_ids` 和有界质心更新，不复制声纹模型；理由：固定上游已经实现并测试核心映射；证据：上游源码测试 1 passed、VKP 交换标签/防坍缩/缺证据 fail-closed 回归和手工 E2E；生效范围：CAM++ 本地分块派生 sidecar，不改原 `spk`、正文或默认路线；回滚：移除全局对齐步骤后旧字段仍可读。 |
+| VKP LocalAgreement/CrispASR overlap-save | 当前既有模块 | **direct internal reuse / implemented anchor** | 意图：利用分块重叠内容佐证相邻块声纹映射；决策：复用 `measure_local_agreement`，只在声纹余弦也达阈值时采用锚点；理由：文本重叠不能单独证明身份；证据：重叠锚点数量和方法进入公开审计；生效范围：候选映射，不覆盖声纹证据；回滚：关闭/提高 overlap 阈值。 |
+| pyannote.metrics + MeetEval | 既有固定版本 | **existing evaluation reused / production promotion pending** | 意图：用 DER/JER 与 cpCER/tcpCER 验收误合并、误拆分和说话人文字归属；决策：不自研评分器；理由：标签稳定不等于分人准确；证据：既有真实 A/B 已证明 CAM++ 仍需质量门；生效范围：评测与晋级，不影响生成；回滚：保持 candidate-only。 |
+
+明确拒绝：自动推断真人姓名、同一来源自匹配、无确认保存生物特征、把私有向量写入公开 Bundle/Git/在线请求、跨视频静默扫描或自动 local/cloud fallback。详细记录：`docs/speaker-global-alignment-and-cross-video-voiceprint-2026-08-10.md`。

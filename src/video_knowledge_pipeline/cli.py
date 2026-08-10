@@ -132,6 +132,13 @@ from .run_artifact_registry import build_run_artifact_registry
 from .screen_text_recovery import run_screen_text_recovery
 from .scene_detection_adapter import run_scene_detection
 from .scene_candidate_evidence import build_scene_candidate_evidence
+from .speaker_global_alignment import (
+    bind_local_voiceprint_role,
+    build_speaker_global_alignment,
+    delete_local_voiceprint,
+    enroll_local_voiceprints,
+    match_local_voiceprints,
+)
 from .technical_shot_detection import run_technical_shot_detection
 from .technical_shot_fusion import fuse_technical_shot_boundaries
 from .shot_breakdown import build_shot_breakdown
@@ -898,6 +905,52 @@ def main(argv: list[str] | None = None) -> int:
             chunk_overlap_seconds=args.chunk_overlap_seconds,
             transcript_path=args.transcript_path or None,
         )
+    elif args.command == "speaker-global-align":
+        result = build_speaker_global_alignment(
+            args.chunked_output,
+            similarity_threshold=args.similarity_threshold,
+            overlap_agreement_threshold=args.overlap_agreement_threshold,
+            max_speakers=args.max_speakers,
+            write=not args.no_write,
+        )
+    elif args.command == "speaker-voiceprint":
+        if args.action == "enroll":
+            if not args.private_alignment or not args.source_id:
+                raise ValueError("enroll requires --private-alignment and --source-id")
+            result = enroll_local_voiceprints(
+                args.private_alignment,
+                args.registry,
+                source_id=args.source_id,
+                confirm_local_biometric_storage=args.confirm_local_biometric_storage,
+                write=not args.no_write,
+            )
+        elif args.action == "match":
+            if not args.private_alignment:
+                raise ValueError("match requires --private-alignment")
+            result = match_local_voiceprints(
+                args.private_alignment,
+                args.registry,
+                similarity_threshold=args.similarity_threshold,
+            )
+        elif args.action == "bind-role":
+            if not args.voiceprint_id or not args.role_label:
+                raise ValueError("bind-role requires --voiceprint-id and --role-label")
+            result = bind_local_voiceprint_role(
+                args.registry,
+                args.voiceprint_id,
+                args.role_label,
+                confirm_role_binding=args.confirm_role_binding,
+                write=not args.no_write,
+            )
+        else:
+            if not args.voiceprint_id:
+                raise ValueError("delete requires --voiceprint-id")
+            result = delete_local_voiceprint(
+                args.registry,
+                args.voiceprint_id,
+                confirm_delete=args.confirm_delete,
+                write=not args.no_write,
+            )
     elif args.command == "asr-retry-snippets":
         result = prepare_asr_retry_snippets(
             args.media_path,
@@ -3030,6 +3083,35 @@ def build_parser() -> argparse.ArgumentParser:
     asr_plan.add_argument("--chunk-boundary-mode", choices=("fixed_duration", "silence_snap"), default="fixed_duration")
     asr_plan.add_argument("--chunk-overlap-seconds", type=float, default=5.0)
     asr_plan.add_argument("--transcript-path", default="", help="Required by qwen3-forced-aligner; existing transcript to align")
+
+    speaker_global = sub.add_parser(
+        "speaker-global-align",
+        help="Map local CAM++ chunk clusters to recording-global anonymous speaker IDs",
+    )
+    speaker_global.add_argument("chunked_output")
+    speaker_global.add_argument("--similarity-threshold", type=float, default=0.60)
+    speaker_global.add_argument("--overlap-agreement-threshold", type=float, default=0.80)
+    speaker_global.add_argument("--max-speakers", type=int, default=15)
+    speaker_global.add_argument("--no-write", action="store_true")
+
+    voiceprint = sub.add_parser(
+        "speaker-voiceprint",
+        help="Explicit local-only enroll/match/delete operations for anonymous voiceprints",
+    )
+    voiceprint.add_argument(
+        "action", choices=("enroll", "match", "bind-role", "delete")
+    )
+    voiceprint.add_argument("--private-alignment", default="")
+    voiceprint.add_argument("--registry", required=True)
+    voiceprint.add_argument("--source-id", default="")
+    voiceprint.add_argument("--voiceprint-id", default="")
+    voiceprint.add_argument("--role-label", default="")
+    voiceprint.add_argument("--similarity-threshold", type=float, default=0.72)
+    voiceprint.add_argument("--confirm-local-biometric-storage", action="store_true")
+    voiceprint.add_argument("--confirm-role-binding", action="store_true")
+    voiceprint.add_argument("--confirm-delete", action="store_true")
+    voiceprint.add_argument("--no-write", action="store_true")
+
     asr_retry = sub.add_parser("asr-retry-snippets", help="Plan or extract only ASR quality-gate retry windows")
     asr_retry.add_argument("media_path")
     asr_retry.add_argument("quality_report_json")

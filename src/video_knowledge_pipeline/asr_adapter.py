@@ -533,6 +533,10 @@ def _asr_metadata(item: dict[str, Any]) -> dict[str, Any]:
     word_timestamps = read_asr_word_timestamps(item)
     return {
         "speaker": speaker,
+        "speaker_local_cluster": (
+            "" if item.get("spk") is None else str(item.get("spk")).strip()
+        ),
+        "speaker_global_id": str(item.get("speaker_global_id") or "").strip(),
         "speaker_role": cue_speaker_role(item),
         "emotion": item.get("emotion") or tags.get("emotion", ""),
         "audio_events": _list_value(item.get("audio_events") or item.get("events")) + tags.get("audio_events", []),

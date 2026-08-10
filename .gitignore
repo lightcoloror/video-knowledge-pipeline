@@ -85,3 +85,8 @@ full-transcript.md
 smart-summary*.md
 review-notes.json
 human-key-points.json
+
+# Local biometric speaker sidecars and opt-in anonymous voiceprint registries
+*-speaker-global-alignment.private.json
+*voiceprints.private.json
+.local/speaker-voiceprints/

@@ -1198,3 +1198,14 @@ The receipt commands consume completed local execution evidence; they never star
 - Effective scope: derived `exports/material-manifest.v1.json` only. It never mutates Timeline/native manifest, embeds transcript text, grants consent/review approval, registers a run, or permits fallback/publishing.
 - Rollback: stop invoking the two CLI commands and remove the adapter/schema; all native Bundle artifacts remain unchanged.
 - Detailed record: `docs/material-manifest-v1-adapter-2026-08-09.md`.
+
+## 2026-08-10 Recording-global anonymous speakers and local cross-video candidates
+
+- Intent: keep one anonymous speaker ID across ASR chunks and optionally compare explicitly selected recordings locally.
+- Decision: reuse pinned FunASR `1.3.30` centroid mapping (`16cd165ac3946cc8c08bf845331f91fefec8e1a9`) plus the existing VKP overlap-agreement module. Do not implement another speaker embedding model.
+- Reason: chunk-local CAM++ labels are not stable across independently executed chunks; voice embeddings are biometric data and require local-only, explicit, deletable storage.
+- Evidence: upstream mapping test passed; VKP regressions cover swapped local labels, same-chunk anti-collapse, missing-center fail-closed, public/private separation, self-match exclusion, explicit role binding and delete.
+- Effective scope: `speaker-global-align` writes an anonymous public alignment and a local biometric `.private.json` sidecar. `speaker-voiceprint enroll|match|bind-role|delete` is opt-in; matching reports only suspected sameness and never assigns identity automatically.
+- Rollback: remove the private sidecar/registry or stop consuming `speaker_global_id`; readers retain backward compatibility with `speaker/spk`.
+- Commands: `python -m video_knowledge_pipeline.cli speaker-global-align <chunked-output.json>` and `python -m video_knowledge_pipeline.cli speaker-voiceprint --help`.
+- Detailed record: `docs/speaker-global-alignment-and-cross-video-voiceprint-2026-08-10.md`.

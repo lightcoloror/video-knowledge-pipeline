@@ -17,7 +17,23 @@ _CHINESE_SPEAKER_RE = re.compile(r"^说话人\s*(\d+)$")
 def cue_speaker(cue: Any) -> str:
     """Return the immutable diarization cluster identity carried by a cue."""
 
-    return _first_value(cue, "speaker", "speaker_id", "spk", "spk_id")
+    # Intent: keep one anonymous speaker label across resumable ASR chunks.
+    # Decision: prefer the derived recording-global ID when present, while
+    # retaining the original local CAM++ cluster in cue metadata.
+    # Reason: chunk-local 0/1 labels restart for every child process and cannot
+    # represent a recording-level speaker identity.
+    # Evidence: speaker_global_alignment adapts FunASR's tested centroid mapper;
+    # no person name or role is inferred here.
+    # Effective scope: reader/normalized anonymous labels only. Sources without
+    # ``speaker_global_id`` retain the historical resolver order.
+    return _first_value(
+        cue,
+        "speaker_global_id",
+        "speaker",
+        "speaker_id",
+        "spk",
+        "spk_id",
+    )
 
 
 def cue_speaker_role(cue: Any) -> str:

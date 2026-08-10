@@ -114,6 +114,71 @@ def test_chunked_funasr_preserves_success_and_resumes_only_failed_chunk(tmp_path
     assert changed["execution_contract_revision"] != checkpoint["execution_contract_revision"]
 
 
+def test_chunked_funasr_maps_swapped_local_speakers_and_hides_centers(
+    tmp_path: Path, monkeypatch
+) -> None:
+    media, chunks = _chunked_media(tmp_path)
+    output = tmp_path / "raw-asr-output.json"
+    monkeypatch.setattr(runner, "_audio_chunks", lambda *_args, **_kwargs: chunks)
+
+    def fake_run(command, **_kwargs):
+        command = list(command)
+        source = Path(_option(command, "--input"))
+        if source.name == "chunk-0000.wav":
+            centers = [
+                {"local_speaker_id": "0", "center": [1.0, 0.0]},
+                {"local_speaker_id": "1", "center": [0.0, 1.0]},
+            ]
+            sentences = [
+                {"text": "甲", "start": 0, "end": 1000, "spk": 0},
+                {"text": "乙", "start": 1000, "end": 2000, "spk": 1},
+            ]
+        else:
+            centers = [
+                {"local_speaker_id": "0", "center": [0.01, 0.99]},
+                {"local_speaker_id": "1", "center": [0.99, 0.01]},
+            ]
+            sentences = [
+                {"text": "乙", "start": 0, "end": 1000, "spk": 0},
+                {"text": "甲", "start": 1000, "end": 2000, "spk": 1},
+            ]
+        Path(_option(command, "--output")).write_text(
+            json.dumps(
+                {
+                    "result": [
+                        {
+                            "text": "".join(row["text"] for row in sentences),
+                            "sentence_info": sentences,
+                            "_speaker_embedding_centers": centers,
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(runner.subprocess, "run", fake_run)
+    result = runner.run_funasr_chunked(
+        input_path=str(media),
+        output_path=str(output),
+        provider="sensevoice",
+        model="iic/SenseVoiceSmall",
+        spk_model="cam++",
+        chunk_seconds=300,
+    )
+
+    assert result["speaker_global_alignment"]["global_speaker_count"] == 2
+    assert result["chunk_results"][0]["sentence_info"][0]["speaker_global_id"] == "speaker-global-001"
+    assert result["chunk_results"][1]["sentence_info"][1]["speaker_global_id"] == "speaker-global-001"
+    assert "_speaker_embedding_centers" not in json.dumps(result["chunk_results"])
+    private_path = Path(result["speaker_global_alignment"]["artifacts"]["private_path"])
+    assert private_path.exists()
+    assert json.loads(private_path.read_text(encoding="utf-8"))["biometric_data"] is True
+    checkpoint = json.loads(Path(result["checkpoint_path"]).read_text(encoding="utf-8"))
+    assert "_speaker_embedding_centers" in json.dumps(checkpoint)
+
+
 def test_rebuild_from_checkpoint_skips_media_probe_and_child_execution(
     tmp_path: Path, monkeypatch
 ) -> None:

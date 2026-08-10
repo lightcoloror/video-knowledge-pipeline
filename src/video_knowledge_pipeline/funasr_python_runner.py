@@ -187,6 +187,18 @@ def run_funasr(
             generate_kwargs["hotword"] = str(hotword).strip()
         if preset_speaker_count is not None:
             generate_kwargs["preset_spk_num"] = int(preset_speaker_count)
+        if spk_model:
+            # Intent: preserve one bounded centroid per chunk-local CAM++ label.
+            # Decision: request FunASR's existing ``return_spk_center`` output;
+            # never expose per-window embeddings or run a second voice model.
+            # Reason: recording-global IDs cannot be recovered from numeric
+            # labels alone because every five-minute child starts again at 0.
+            # Evidence: pinned FunASR 1.3.30 ``postprocess`` returns centers in
+            # the same corrected-label order as ``sentence_info[].spk``.
+            # Effective scope: explicit local CAM++ child artifacts only. The
+            # vectors are biometric local evidence and are stripped from public
+            # transcript/Bundle exports by the parent runner.
+            generate_kwargs["return_spk_center"] = True
         generated = asr_model.generate(**generate_kwargs)
     except Exception as exc:  # pragma: no cover - optional model runtime.
         runtime_metrics = _finish_runtime_metrics(runtime_metrics_state)
@@ -204,6 +216,10 @@ def run_funasr(
         }
 
     runtime_metrics = _finish_runtime_metrics(runtime_metrics_state)
+    generated, speaker_embedding_evidence = _prepare_generated_output(
+        generated,
+        retain_speaker_centers=bool(spk_model),
+    )
     payload = {
         "schema": "video_knowledge_funasr_raw_output.v1",
         "provider": provider,
@@ -228,10 +244,69 @@ def run_funasr(
         "input": str(media),
         "duration_seconds": _media_duration_seconds(media),
         "runtime_metrics": runtime_metrics,
+        "speaker_embedding_evidence": speaker_embedding_evidence,
         "result": generated,
     }
     write_json(output, payload)
     return {"ok": True, "error": "", "output_path": str(output), "records": _record_count(generated)}
+
+
+def _prepare_generated_output(
+    generated: Any,
+    *,
+    retain_speaker_centers: bool,
+) -> tuple[Any, dict[str, Any]]:
+    """Serialize only per-speaker centers and mark their privacy boundary."""
+
+    value = _json_safe(generated)
+    records = value if isinstance(value, list) else [value]
+    center_count = 0
+    dimensions: set[int] = set()
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        centers = record.pop("spk_embedding_center", None)
+        if centers is None or not retain_speaker_centers:
+            continue
+        center_rows = centers if isinstance(centers, list) else []
+        if center_rows and not isinstance(center_rows[0], list):
+            center_rows = [center_rows]
+        private_rows: list[dict[str, Any]] = []
+        for index, center in enumerate(center_rows):
+            if not isinstance(center, list) or not center:
+                continue
+            vector = [float(item) for item in center]
+            private_rows.append(
+                {"local_speaker_id": str(index), "center": vector}
+            )
+            center_count += 1
+            dimensions.add(len(vector))
+        if private_rows:
+            record["_speaker_embedding_centers"] = private_rows
+    return value, {
+        "status": "available" if center_count else "not_requested" if not retain_speaker_centers else "unavailable",
+        "center_count": center_count,
+        "dimensions": sorted(dimensions),
+        "biometric_data": bool(center_count),
+        "must_remain_local": bool(center_count),
+        "must_not_be_committed": bool(center_count),
+        "per_window_embeddings_retained": False,
+        "person_identity_inferred": False,
+    }
+
+
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    if hasattr(value, "detach"):
+        value = value.detach()
+    if hasattr(value, "cpu"):
+        value = value.cpu()
+    if hasattr(value, "tolist"):
+        return _json_safe(value.tolist())
+    return value
 
 
 def _start_runtime_metrics(device: str) -> dict[str, Any]:
