@@ -283,6 +283,75 @@ def test_reader_plan_accepts_three_distinct_core_insights_for_short_content() ->
     assert result["core_insight_count"] == 3
 
 
+def test_reader_plan_compresses_overlong_overview_at_sentence_boundary() -> None:
+    plan = _valid_plan()
+    plan["overview"]["text"] = (
+        "这是第一句，概括采访背景与核心主题。"
+        "这是第二句，说明关键决策与主要经历。"
+        "这是第三句，补充行动、隐私和待复核边界。" * 12
+    )
+
+    normalized = normalize_reader_plan_candidate(plan, fact_pack=_fact_pack())
+    repaired = normalized["plan"]
+    validation = validate_reader_plan(
+        repaired,
+        fact_pack=_fact_pack(),
+        expected_section_ids=set(repaired["source_section_ids"]),
+    )
+
+    assert validation["passed"] is True
+    assert 24 <= len(repaired["overview"]["text"]) <= 240
+    assert repaired["overview"]["text"].endswith("。")
+    assert any(row["kind"] == "compress_overlong_overview" for row in normalized["repairs"])
+
+
+def test_interview_plan_anonymizes_unbound_identity_and_drops_prescriptive_action() -> None:
+    plan = _valid_plan()
+    plan["overview"]["text"] = "陈女士讲述了自己的诊治与保险经历，采访者记录其原意。"
+    plan["actions"] = [
+        {
+            "text": "应优先选择非手术治疗，以避免延误。",
+            "time_range": "00:01:00.000 - 00:02:00.000",
+            "evidence_ids": ["ev-0001"],
+        }
+    ]
+    plan["themes"][0]["method"] = "选择放疗方案，避免再次接受手术。"
+    plan["themes"][0]["action"] = "应优先选择非手术治疗，以避免延误。"
+    fact_pack = _fact_pack()
+    fact_pack["content_profile"] = "interview"
+
+    normalized = normalize_reader_plan_candidate(plan, fact_pack=fact_pack)
+    repaired = normalized["plan"]
+    validation = validate_reader_plan(
+        repaired,
+        fact_pack=fact_pack,
+        expected_section_ids=set(repaired["source_section_ids"]),
+    )
+
+    assert validation["passed"] is True
+    assert "陈女士" not in json.dumps(repaired, ensure_ascii=False)
+    assert "受访者" in repaired["overview"]["text"]
+    assert repaired["actions"] == []
+    assert repaired["themes"][0]["action"] == ""
+    assert repaired["themes"][0]["method"].startswith("受访者当时的个人选择是：")
+    assert {
+        "anonymize_unbound_interview_identity",
+        "drop_interview_prescriptive_action",
+        "drop_interview_prescriptive_theme_action",
+        "attribute_interview_high_stakes_method",
+    }.issubset({row["kind"] for row in normalized["repairs"]})
+
+    rendered = render_reader_summary(
+        repaired,
+        title="客户采访",
+        first_time="00:00:00.000",
+        last_time="00:03:00.000",
+    )
+    assert "## 核心主题 / 内容主线" in rendered
+    assert "- 个人选择/经历：" in rendered
+    assert "优先选择非手术" not in rendered
+
+
 def test_reader_plan_normalizes_overlapping_theme_windows_and_action_verbs() -> None:
     plan = _valid_plan()
     plan["themes"][0]["time_range"] = "00:00:00.000 - 00:01:20.000"

@@ -250,21 +250,46 @@ def run_smart_summary_global_reduce(
             call = {"ok": True, "error": "", "content": content}
             reused_candidate = True
         else:
-            candidate_path = exports / "smart-summary-global-reduce-candidate.md"
-            if not candidate_path.exists():
-                result["status"] = "blocked_missing_reduce_candidate"
-                result["ok"] = False
-                result["next_actions"] = ["Run one successful Reduce call before reusing its persisted candidate."]
-                return _write(root, result, prompt=prompt, fact_pack=fact_pack, write=write)
-            content = _normalise_markdown(candidate_path.read_text(encoding="utf-8-sig"), title=title)
-            call = {"ok": True, "error": "", "content": content}
-            reused_candidate = True
-            reader_plan_validation = {
-                "passed": True,
-                "errors": [],
-                "compatibility_mode": True,
-                "detail": "legacy Markdown candidate reused without upgrading its generation contract",
-            }
+            raw_response_path = exports / "smart-summary-global-reduce-raw-response.txt"
+            if raw_response_path.is_file():
+                # Intent: recover a complete provider response after a
+                # deterministic contract-label or presentation-length repair.
+                # Decision: parse, normalize and revalidate the immutable raw
+                # response before considering the legacy Markdown candidate.
+                # Reason: a valid paid/local result must not require another
+                # model call merely because the first validation was stricter
+                # than the deterministic normalizer.
+                # Evidence: the 2026-08-10 interview Reduce was complete and
+                # evidence-bound; only overview.text exceeded maxLength=240.
+                # Effective scope: --reuse-candidate only; no network call,
+                # evidence mutation, silent fallback or raw response rewrite.
+                raw_candidate = raw_response_path.read_text(encoding="utf-8-sig")
+                reader_plan, reader_plan_validation, content = _validated_reader_plan_content(
+                    raw_candidate,
+                    fact_pack=fact_pack,
+                    expected_ids=expected_ids,
+                    title=title,
+                    first_time=first_time,
+                    last_time=last_time,
+                )
+                call = {"ok": True, "error": "", "content": content}
+                reused_candidate = True
+            else:
+                candidate_path = exports / "smart-summary-global-reduce-candidate.md"
+                if not candidate_path.exists():
+                    result["status"] = "blocked_missing_reduce_candidate"
+                    result["ok"] = False
+                    result["next_actions"] = ["Run one successful Reduce call before reusing its persisted candidate."]
+                    return _write(root, result, prompt=prompt, fact_pack=fact_pack, write=write)
+                content = _normalise_markdown(candidate_path.read_text(encoding="utf-8-sig"), title=title)
+                call = {"ok": True, "error": "", "content": content}
+                reused_candidate = True
+                reader_plan_validation = {
+                    "passed": True,
+                    "errors": [],
+                    "compatibility_mode": True,
+                    "detail": "legacy Markdown candidate reused without upgrading its generation contract",
+                }
     else:
         if not execute:
             result["next_actions"] = ["Rerun with --execute after reviewing the Reduce input and provider boundary."]
@@ -756,9 +781,11 @@ def _render_reduce_prompt(
 ) -> str:
     manifest = _mapping(root / "manifest.json")
     title = str(manifest.get("title") or root.name)
+    content_profile = "interview" if "采访" in title else "course_or_general"
     fact_sections = _fact_sections_by_id(fact_pack)
     payload = {
         "title": title,
+        "content_profile": content_profile,
         "course_map": course_map,
         "chapters": [
             {
@@ -800,6 +827,8 @@ def _render_reduce_prompt(
 18. verbatim_quote 必须能在相应 evidence snippet 中逐字找到；否则使用 reusable_expression，不得加引号冒充原句。 普通结论优先引用每章 eligible-evidence-set；只有逐字原句才引用单条 snippet ID。
 19. 严格控制数组规模：core_insights 3–6 项（短内容不得为凑数重复观点）、themes 3–8 项、principles 3–5 项、actions 0–8 项、reusable_expressions 0–5 项、review_items 0–6 项。
 20. 直接输出最终 JSON；不要在隐藏推理或解释中重复输入材料。
+21. 当 content_profile=interview 时，未经 eligible evidence 明确出现的姓名、身份、职务一律不得推断；使用“受访者”“采访者”等匿名角色。
+22. 当 content_profile=interview 时，个人治疗、投保或理赔选择只能表述为“受访者的经历/选择/看法”，不得改写成面向读者的医疗或保险建议；actions 只保留访谈中明确承诺的后续动作，没有则返回空数组。
 """.strip()
     return instructions + "\n\n输入 JSON：\n" + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
@@ -975,6 +1004,9 @@ def _chapter_fact_pack(
     *,
     source_paths: dict[str, Path] | None = None,
 ) -> dict[str, Any]:
+    manifest = _mapping(root / "manifest.json")
+    title = str(manifest.get("title") or root.name)
+    content_profile = "interview" if "采访" in title else "course_or_general"
     workflow_sections = {
         str(row.get("section_id") or ""): row
         for row in workflow.get("sections") or []
@@ -1002,6 +1034,8 @@ def _chapter_fact_pack(
     base = {
         "schema": CHAPTER_FACT_PACK_SCHEMA,
         "bundle_dir": str(root),
+        "title": title,
+        "content_profile": content_profile,
         "sections": sections,
         "lineage": lineage,
         "summary": {
@@ -1022,6 +1056,8 @@ def _chapter_fact_pack(
     base["revision"] = canonical_json_sha256(
         {
             "schema": CHAPTER_FACT_PACK_SCHEMA,
+            "title": title,
+            "content_profile": content_profile,
             "sections": sections,
             "lineage": lineage,
         }

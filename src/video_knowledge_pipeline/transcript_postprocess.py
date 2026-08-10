@@ -639,10 +639,20 @@ def _punctuate(text: str, *, mode: str) -> str:
     if not value:
         return ""
     value = _normalize_inline_punctuation(value)
+    # Intent: make the documented preserve mode actually preserve terminal
+    # punctuation instead of turning a source comma into the invalid `，。`.
+    # Decision: return after safe full-width normalisation and before adding a
+    # sentence terminator.  Readable/conservative modes keep their old policy.
+    # Reason: Cantonese SenseVoice cues commonly end in commas; appending a full
+    # stop produced hundreds of false quality warnings in real interview runs.
+    # Evidence: the 2026-08-10 interview bundles reproduced `，。` in 281 cues
+    # even when the operator selected `--punctuation-mode preserve`.
+    # Effective scope: preserve mode text only; cue IDs, timestamps, speakers,
+    # raw ASR and the other punctuation modes are unchanged.
+    if mode == "preserve":
+        return value
     if mode == "readable":
         value = _insert_readable_clause_commas(value)
-    if mode == "preserve" and any(mark in value for mark in SENTENCE_END):
-        return value
     if any(mark in value for mark in SENTENCE_END):
         return value
     return value + ("？" if _looks_like_question(value) else "。")

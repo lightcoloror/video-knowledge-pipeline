@@ -354,6 +354,36 @@ def normalize_reader_plan_candidate(
     normalized = json.loads(json.dumps(plan, ensure_ascii=False))
     eligible, _review_only, snippets = _fact_pack_evidence(fact_pack)
     repairs: list[dict[str, Any]] = []
+    content_profile = str(fact_pack.get("content_profile") or "course_or_general")
+
+    overview = normalized.get("overview")
+    if isinstance(overview, dict):
+        original_overview = str(overview.get("text") or "").strip()
+        if len(original_overview) > 240:
+            # Intent: preserve a complete local/paid Reduce response when the
+            # provider writes a paragraph where the contract asks for a short
+            # reader-facing overview.
+            # Decision: keep whole leading sentences up to the schema limit;
+            # all omitted detail remains in evidence-bound insights/themes.
+            # Reason: this is a presentation-length repair, not a new claim or
+            # a substitute for missing evidence.
+            # Evidence: the 2026-08-10 local Qwen interview Reduce passed every
+            # provenance gate and failed only overview.text maxLength=240.
+            # Effective scope: overview display text only; the immutable raw
+            # response, chapter fact pack, transcript and evidence are intact.
+            overview["text"] = _bounded_overview(original_overview, limit=240)
+            repairs.append(
+                {
+                    "kind": "compress_overlong_overview",
+                    "location": "overview.text",
+                    "before_chars": len(original_overview),
+                    "after_chars": len(str(overview["text"])),
+                }
+            )
+
+    if content_profile == "interview":
+        repairs.extend(_anonymize_unbound_interview_identities(normalized, fact_pack=fact_pack))
+        repairs.extend(_normalize_interview_theme_fields(normalized.get("themes") or []))
 
     repairs.extend(_partition_overlapping_theme_ranges(normalized.get("themes") or []))
 
@@ -387,6 +417,16 @@ def normalize_reader_plan_candidate(
     actions: list[dict[str, Any]] = []
     for index, item in enumerate(normalized.get("actions") or [], start=1):
         if not isinstance(item, dict):
+            continue
+        if content_profile == "interview" and _is_prescriptive_health_or_insurance_action(
+            str(item.get("text") or "")
+        ):
+            repairs.append(
+                {
+                    "kind": "drop_interview_prescriptive_action",
+                    "location": f"actions[{index}]",
+                }
+            )
             continue
         if _looks_actionable(str(item.get("text") or "")):
             actions.append(item)
@@ -424,6 +464,145 @@ def normalize_reader_plan_candidate(
         "repairs": repairs,
         "repair_count": len(repairs),
     }
+
+
+def _bounded_overview(value: str, *, limit: int) -> str:
+    text = str(value or "").strip()
+    if len(text) <= limit:
+        return text
+    sentences = [item.strip() for item in re.split(r"(?<=[。！？!?])", text) if item.strip()]
+    kept: list[str] = []
+    for sentence in sentences:
+        candidate = "".join(kept) + sentence
+        if len(candidate) > limit:
+            break
+        kept.append(sentence)
+    bounded = "".join(kept).strip()
+    if len(bounded) >= 24:
+        return bounded
+    clipped = text[:limit].rstrip("，、；：,;: ")
+    return clipped if clipped.endswith(("。", "！", "？", "!", "?")) else clipped + "。"
+
+
+def _anonymize_unbound_interview_identities(
+    plan: dict[str, Any],
+    *,
+    fact_pack: dict[str, Any],
+) -> list[dict[str, Any]]:
+    source = _compact(
+        "".join(
+            str(ref.get("snippet") or "")
+            for section in fact_pack.get("sections") or []
+            if isinstance(section, dict)
+            for ref in section.get("evidence_refs") or []
+            if isinstance(ref, dict)
+        )
+    )
+    pattern = re.compile(r"受访者[\u4e00-\u9fff]{1,3}(?:女士|先生)|[\u4e00-\u9fff]{1,3}(?:女士|先生)")
+    replacements: set[str] = set()
+
+    def visit(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {key: visit(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [visit(item) for item in value]
+        if not isinstance(value, str):
+            return value
+
+        def replace(match: re.Match[str]) -> str:
+            identity = match.group(0)
+            compact_identity = _compact(identity.replace("受访者", ""))
+            if compact_identity and compact_identity in source:
+                return identity
+            replacements.add(identity)
+            return "受访者"
+
+        return pattern.sub(replace, value)
+
+    updated = visit(plan)
+    plan.clear()
+    plan.update(updated)
+    return [
+        {
+            "kind": "anonymize_unbound_interview_identity",
+            "location": "reader_plan",
+            "identity": identity,
+        }
+        for identity in sorted(replacements)
+    ]
+
+
+def _is_prescriptive_health_or_insurance_action(value: str) -> bool:
+    compact = _compact(value)
+    high_stakes = any(
+        token in compact
+        for token in ("手术", "放疗", "治疗", "用药", "投保", "保险", "理赔", "报销")
+    )
+    prescriptive = any(
+        token in compact
+        for token in ("优先", "应该", "应当", "建议", "必须", "无需", "避免延误", "即刻执行")
+    )
+    return high_stakes and prescriptive
+
+
+def _normalize_interview_theme_fields(
+    themes: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Keep interview experiences distinct from reader-facing advice.
+
+    Intent: prevent a valid evidence-bound personal treatment or insurance choice
+    from becoming prescriptive guidance merely because the reader schema uses
+    ``method`` and ``action`` fields.
+    Decision: remove prescriptive high-stakes theme actions and explicitly attribute
+    high-stakes methods to the interviewee when the provider omitted attribution.
+    Reason: the underlying account remains useful evidence, but its speech act is a
+    personal experience rather than a recommendation to the reader.
+    Evidence: the 2026-08-10 interview Reduce rendered "优先选择非手术方案" and
+    "若经济无虞，应优先..." despite the top-level action list being empty.
+    Effective scope: deterministic normalization of interview reader plans only;
+    raw model output, transcript and chapter facts remain immutable.
+    """
+
+    repairs: list[dict[str, Any]] = []
+    for index, theme in enumerate(themes, start=1):
+        if not isinstance(theme, dict):
+            continue
+        action = str(theme.get("action") or "").strip()
+        if action and _is_prescriptive_health_or_insurance_action(action):
+            theme["action"] = ""
+            repairs.append(
+                {
+                    "kind": "drop_interview_prescriptive_theme_action",
+                    "location": f"themes[{index}].action",
+                }
+            )
+
+        method = str(theme.get("method") or "").strip()
+        if not method or not _mentions_health_or_insurance_choice(method):
+            continue
+        if any(token in method for token in ("受访者", "患者", "客户", "采访者", "讲者")):
+            continue
+        theme["method"] = f"受访者当时的个人选择是：{method}"
+        repairs.append(
+            {
+                "kind": "attribute_interview_high_stakes_method",
+                "location": f"themes[{index}].method",
+            }
+        )
+    return repairs
+
+
+def _mentions_health_or_insurance_choice(value: str) -> bool:
+    compact = _compact(value)
+    domain = any(
+        token in compact
+        for token in ("手术", "放疗", "治疗", "用药", "投保", "保险", "理赔", "报销")
+    )
+    choice = any(
+        token in compact
+        for token in ("选择", "决定", "倾向", "采用", "办理", "申请", "补办", "支付")
+    )
+    return domain and choice
 
 
 def _partition_overlapping_theme_ranges(
@@ -545,7 +724,7 @@ def validate_reader_plan(
     errors.extend(_semantic_text_errors(plan))
     errors.extend(_duplicate_claim_errors(plan))
 
-    source_has_actions = any(
+    source_has_actions = str(fact_pack.get("content_profile") or "") != "interview" and any(
         str(fact.get("fact_type") or "") == "actions"
         for section in fact_pack.get("sections") or []
         if isinstance(section, dict)
@@ -582,7 +761,8 @@ def render_reader_summary(
     lines = [f"# {title} - 智能总结", "", "<!-- codex_llm_rewrite_final -->", "", "## 基本信息"]
     lines.extend([f"- 标题：{title}", f"- 内容范围：{first_time} - {last_time}", "", "## 一句话概览", str(plan["overview"]["text"]).strip()])
 
-    lines.extend(["", "## 核心主题 / 课程主线"])
+    is_interview = "采访" in str(title)
+    lines.extend(["", "## 核心主题 / 内容主线" if is_interview else "## 核心主题 / 课程主线"])
     for item in plan.get("core_insights") or []:
         times = "、".join(item.get("time_ranges") or [])
         lines.append(f"- **{item['title']}**（{times}）：{item['text']}")
@@ -590,7 +770,12 @@ def render_reader_summary(
     lines.extend(["", "## 分段总结"])
     for theme in plan.get("themes") or []:
         lines.extend(["", f"### {theme['title']}（{theme['time_range']}）", str(theme["summary"]).strip()])
-        for label, key in (("问题", "problem"), ("原因", "reason"), ("方法", "method"), ("案例", "case"), ("行动", "action")):
+        labels = (
+            (("问题", "problem"), ("原因", "reason"), ("个人选择/经历", "method"), ("案例", "case"), ("明确后续动作", "action"))
+            if is_interview
+            else (("问题", "problem"), ("原因", "reason"), ("方法", "method"), ("案例", "case"), ("行动", "action"))
+        )
+        for label, key in labels:
             value = str(theme.get(key) or "").strip()
             if value:
                 lines.append(f"- {label}：{value}")

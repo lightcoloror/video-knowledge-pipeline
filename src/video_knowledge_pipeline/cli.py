@@ -192,6 +192,7 @@ from .transcript_source_arbitration import arbitrate_transcript_sources
 from .transcript_editor import apply_transcript_edits, prepare_transcript_edit_session
 from .transcript_resegment import resegment_transcript
 from .transcript_postprocess import postprocess_asr_transcript
+from .transcript_translation import translate_transcript_to_mandarin
 from .transcript_quality_gate import run_transcript_quality_gate
 from .transcript_downstream_refresh import refresh_transcript_downstream_outputs
 from .transcript_readable_llm import run_readable_transcript_llm_polish
@@ -1061,6 +1062,18 @@ def main(argv: list[str] | None = None) -> int:
             set_corrected=not args.no_set_corrected,
             write=not args.no_write,
             progress_callback=stderr_progress_callback,
+        )
+    elif args.command == "translate-transcript-to-mandarin":
+        result = translate_transcript_to_mandarin(
+            args.bundle_dir,
+            source_path=args.source_path or None,
+            input_json=args.input_json or None,
+            batch_size=args.batch_size,
+            route_id=args.route_id,
+            route_revision=args.route_revision,
+            direct_lmstudio=args.direct_lmstudio,
+            execute=args.execute,
+            write=not args.no_write,
         )
     elif args.command == "run-ready-pipeline":
         result = run_ready_lecture_pipeline(args.workspace_dir, extractor=args.extractor)
@@ -3551,6 +3564,24 @@ def build_parser() -> argparse.ArgumentParser:
     postprocess.add_argument("--segment-policy", choices=["preserve", "readable_merge"], default="preserve", help="preserve keeps IDs/order/timestamps/boundaries; readable_merge explicitly enables split/merge with lineage records")
     postprocess.add_argument("--no-set-corrected", action="store_true", help="Do not promote the postprocessed transcript to manifest.corrected_transcript_*")
     postprocess.add_argument("--no-write", action="store_true")
+
+    translate_mandarin = sub.add_parser(
+        "translate-transcript-to-mandarin",
+        help="Translate a Cantonese transcript into a separate Mandarin subtitle sidecar using the local text route",
+    )
+    translate_mandarin.add_argument("bundle_dir")
+    translate_mandarin.add_argument("--source-path", default="")
+    translate_mandarin.add_argument("--input-json", default="", help="Import reviewed translations instead of running a model")
+    translate_mandarin.add_argument("--batch-size", type=int, default=24)
+    translate_mandarin.add_argument("--route-id", default="")
+    translate_mandarin.add_argument("--route-revision", default="")
+    translate_mandarin.add_argument(
+        "--direct-lmstudio",
+        action="store_true",
+        help="Explicitly use the fixed local LM Studio Qwen3.5 route at 127.0.0.1:1234; never falls back online",
+    )
+    translate_mandarin.add_argument("--execute", action="store_true", help="Execute only the configured local text route")
+    translate_mandarin.add_argument("--no-write", action="store_true")
 
     readable_llm = sub.add_parser("readable-transcript-llm-polish", help="Preview/import/execute LLM punctuation and segmentation polish for the readable transcript")
     readable_llm.add_argument("bundle_dir")
