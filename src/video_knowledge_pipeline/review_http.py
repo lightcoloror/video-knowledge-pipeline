@@ -15,6 +15,8 @@ from urllib.parse import unquote, urlsplit
 
 from .review_writeback import apply_review_payload_to_bundle
 from .shot_review import apply_shot_review_notes
+from .subtitle_editor import apply_subtitle_review, build_subtitle_editor_projection, validate_subtitle_review
+from .subtitle_editor_ui import render_subtitle_editor_page
 from .video_workbench import export_video_workbench
 from .storage import read_json
 from .webui_bridge import refresh_bundle_review_html
@@ -62,6 +64,10 @@ class ReviewHandler(BaseHTTPRequestHandler):
             return self._serve_review_html()
         if path in {"/workbench", "/video-workbench.html"}:
             return self._serve_workbench_html()
+        if path in {"/subtitle-editor", "/subtitle-editor.html"}:
+            return self._serve_subtitle_editor_html()
+        if path == "/api/subtitle-editor/project":
+            return self._json_response(build_subtitle_editor_projection(self.bundle_dir, write=False))
         if path == "/api/review/status":
             return self._json_response(
                 {
@@ -87,10 +93,47 @@ class ReviewHandler(BaseHTTPRequestHandler):
         if not self._prepare_mutation():
             return
         endpoint = urlsplit(self.path).path
-        if endpoint not in {"/api/review/apply", "/api/shot-review/apply"}:
+        if endpoint not in {
+            "/api/review/apply",
+            "/api/shot-review/apply",
+            "/api/subtitle-editor/validate",
+            "/api/subtitle-editor/apply",
+        }:
             return self._json_error(HTTPStatus.NOT_FOUND, "not found")
         try:
             request = self._read_json_body()
+            if endpoint.startswith("/api/subtitle-editor/"):
+                projection = build_subtitle_editor_projection(self.bundle_dir, write=False)
+                expected = str(request.get("bundle_revision") or "")
+                if not expected or expected != str(projection["bundle_revision"]):
+                    return self._json_error(
+                        HTTPStatus.CONFLICT,
+                        "subtitle projection changed after this page was loaded; reload before applying",
+                        extra={"bundle_revision": projection["bundle_revision"]},
+                    )
+                notes = request.get("subtitle_review_notes")
+                if not isinstance(notes, dict):
+                    raise ValueError("subtitle_review_notes must be a JSON object")
+                if endpoint == "/api/subtitle-editor/validate":
+                    validated = validate_subtitle_review(self.bundle_dir, notes)
+                    return self._json_response(
+                        {
+                            "ok": True,
+                            "status": "validated",
+                            "summary": validated["summary"],
+                            "bundle_revision": projection["bundle_revision"],
+                        }
+                    )
+                result = apply_subtitle_review(self.bundle_dir, review_json=notes, write=True)
+                return self._json_response(
+                    {
+                        "ok": bool(result.get("ok")),
+                        "status": result.get("status"),
+                        "summary": result.get("summary"),
+                        "bundle_revision": projection["bundle_revision"],
+                    },
+                    HTTPStatus.OK if result.get("ok") else HTTPStatus.UNPROCESSABLE_ENTITY,
+                )
             expected = str(request.get("bundle_revision") or "")
             current = review_bundle_revision(self.bundle_dir)
             if not expected or expected != current:
@@ -183,6 +226,20 @@ class ReviewHandler(BaseHTTPRequestHandler):
         ).replace("</", "<\\/")
         bootstrap = f"<script>window.VKP_SHOT_REVIEW_API = {config};</script>"
         html_text = html_text.replace("</head>", bootstrap + "</head>", 1)
+        payload = html_text.encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self._security_headers("text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def _serve_subtitle_editor_html(self) -> None:
+        projection = build_subtitle_editor_projection(self.bundle_dir, write=False)
+        html_text = render_subtitle_editor_page(
+            self.bundle_dir,
+            projection=projection,
+            csrf_token=self.csrf_token,
+        )
         payload = html_text.encode("utf-8")
         self.send_response(HTTPStatus.OK)
         self._security_headers("text/html; charset=utf-8")
@@ -314,7 +371,8 @@ def _bundle_media_path(root: Path) -> Path | None:
     raw = str(manifest.get("multimodal_sample_review_media_path") or manifest.get("media_path") or "").strip()
     if not raw:
         return None
-    path = Path(raw).expanduser().resolve()
+    path = Path(raw).expanduser()
+    path = (path if path.is_absolute() else root / path).resolve()
     return path if path.is_file() else None
 
 
@@ -391,6 +449,7 @@ def main(argv: list[str] | None = None) -> None:
     url = f"http://{address}:{port}/"
     print(f"VKP review UI: {url}", flush=True)
     print(f"VKP Workbench: {url.rstrip('/')}/workbench", flush=True)
+    print(f"VKP subtitle editor: {url.rstrip('/')}/subtitle-editor", flush=True)
     print("Loopback only. Drafts stay in browser storage until Save to VKP is clicked.", flush=True)
     if args.open_browser:
         webbrowser.open(url)

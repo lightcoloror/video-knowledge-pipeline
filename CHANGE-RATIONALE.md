@@ -1,5 +1,43 @@
 # Change rationale
 
+## 2026-08-10 18:42:00 +08:00 | Codex (GPT-5.6 Sol) | moys-asr-workflow subtitle editor integration
+
+### CR-20260810-01 — Fixed upstream editor shell
+
+- 意图：复用成熟字幕播放器、波形、列表、快捷键、拆分合并、撤销、批量替换和导出交互。
+- 决策：固定 `Moyf/moys-asr-workflow` v1.3.1 commit `949bc84058cdae1d9c021c50203e6d2742f9392c`，仅引入八个 `web/` 根资源；七个原文件保持逐字节一致，模板仅增加两个 adapter 插槽。
+- 理由：避免重写已经过上游测试的编辑算法，同时排除 Provider、Key、ASR、桌面壳和第二套服务器。
+- 证据：上游 JavaScript 定向测试 92/92；固定文件 SHA-256 对比 7/7 一致；`SOURCE_INVENTORY.json` 已登记。
+- 生效范围：`static/moys-subtitle-editor/` 和独立字幕编辑页。
+- 回滚方式：删除该静态目录与新路由；旧 `transcript-editor.html` 保持可用。
+
+### CR-20260810-02 — Evidence-preserving dual-track projection
+
+- 意图：让粤语原文与普通话翻译共享时间边界，并保留 segment lineage、全局匿名说话人、字级时间戳与 evidence IDs。
+- 决策：新增 `subtitle_editor_projection.v1`；时间统一为整数毫秒；Bundle 媒体时长进入稳定哈希；缺翻译保持空轨。
+- 理由：上游项目文件不能替代 VKP 的 canonical transcript、Timeline 或翻译 sidecar。
+- 证据：投影双跑幂等、毫秒转换、媒体边界、缺翻译和全局说话人测试。
+- 生效范围：只读编辑投影和浏览器草稿。
+- 回滚方式：停止生成 `subtitle-editor-project.json`，原始 Bundle 不受影响。
+
+### CR-20260810-03 — Explicit loopback apply and immutable sources
+
+- 意图：区分自动保存草稿与正式写回，避免旧页面、跨源请求或漂移输入覆盖 Bundle。
+- 决策：复用 Review Server 的 loopback Host、CSRF、Origin、请求上限和 `/media` Range；正式应用还校验 projection/source hash、来源顺序、媒体边界、说话人及人工确认；写回工具栏固定锚定上游顶层 `body > h1`，不命中隐藏面板的局部 header。
+- 理由：浏览器 localStorage 不是执行授权，字幕边界也不应反写原始 ASR 时间。
+- 证据：本地 HTTP roundtrip、损坏 JSON、重复 ID、越界时间、跨说话人合并和 hash drift 负例；Playwright 合成 Bundle 草稿恢复/apply/revision conflict 2/2 通过。
+- 生效范围：人工确认字幕 sidecar、双轨字幕和 apply receipt。
+- 回滚方式：移除新增 Review Server 路由；原始 ASR、翻译和 Timeline SHA 保持不变。
+
+### CR-20260810-04 — Derived export plans and downstream freshness
+
+- 意图：把人工字幕结果交给后续流程，同时禁止自动剪片或伪造完整翻译。
+- 决策：生成 SRT/VTT/ASS、OTIO、FFconcat 和 kept-ranges 派生计划；普通话字幕仅在每个有效段均有文本时生成；静音区仅 `removed=true` 时纳入；Smart Summary、最终合并文档和字幕导出标记 stale。
+- 理由：导出计划可复核但不授予执行权限；人工文字变化会使下游语义产物过期。
+- 证据：源 SHA 不变、缺翻译、不显式删除静音区、manifest 与 run registry 测试。
+- 生效范围：Bundle 派生输出，不调用在线模型，不执行 FFmpeg。
+- 回滚方式：停止消费人工 sidecar并重新从 canonical transcript 生成派生产物。
+
 ## 2026-08-05 13:51:38 +08:00 | Codex (GPT-5.6) | Public repository compliance closure
 
 ### CR-20260805-01 — Third-party attribution

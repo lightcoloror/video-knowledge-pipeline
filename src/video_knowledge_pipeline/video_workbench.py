@@ -16,6 +16,7 @@ from .transcript_semantic_correction import transcript_semantic_correction_statu
 from .transcript import format_timestamp
 from .video_decomposition import video_decomposition_report_status
 from .shot_review_workbench import prepare_shot_review_workbench
+from .subtitle_editor_ui import prepare_subtitle_editor
 
 SCHEMA = "video_knowledge_pipeline.video_workbench.v1"
 
@@ -53,6 +54,18 @@ def export_video_workbench(bundle_dir: str | Path, *, write: bool = True) -> dic
         for position, item in enumerate(timeline, start=1)
         if isinstance(item, dict)
     ]
+    subtitle_editor_status: dict[str, Any] = {"status": "not_prepared"}
+    if write:
+        try:
+            subtitle_editor_status = prepare_subtitle_editor(root, write=True)
+            manifest = read_json(manifest_path)
+            if not isinstance(manifest, dict):
+                raise ValueError("manifest.json must remain a JSON object after subtitle editor preparation")
+        except (FileNotFoundError, ValueError) as exc:
+            subtitle_editor_status = {
+                "status": "blocked_missing_subtitle_editor_input",
+                "reason": str(exc),
+            }
     artifacts = _artifact_cards(root, manifest)
     review_closure = _review_closure_summary(root)
     evidence_status = _evidence_status_summary(root, [item for item in timeline if isinstance(item, dict)])
@@ -91,6 +104,7 @@ def export_video_workbench(bundle_dir: str | Path, *, write: bool = True) -> dic
         "external_reuse_status": external_reuse_status,
         "subqueue_action_plan": subqueue_action_plan,
         "shot_review": shot_review,
+        "subtitle_editor_status": subtitle_editor_status,
         "paths": {
             "html": str(root / "video-workbench.html"),
             "json": str(root / "video-workbench.json"),
@@ -324,7 +338,7 @@ def _term_correction_impact_summary(root: Path, manifest: dict[str, Any]) -> dic
 def _transcript_arbitration_commands(root: Path) -> list[str]:
     quoted = _ps_quote(str(root))
     return [
-        f".\\scripts\\video-knowledge.ps1 prepare-transcript-edit-session {quoted} --limit 0",
+        f".\\scripts\\video-knowledge.ps1 prepare-subtitle-editor {quoted}",
         f".\\scripts\\video-knowledge.ps1 prepare-review-session {quoted} --limit 0 --group-by reason",
         f".\\scripts\\video-knowledge.ps1 transcript-source-arbitration {quoted}",
         f".\\scripts\\video-knowledge.ps1 term-correction-impact-report {quoted}",
@@ -414,7 +428,8 @@ def _artifact_cards(root: Path, manifest: dict[str, Any]) -> list[dict[str, Any]
         ("task_console", "任务控制台", "task-console.html"),
         ("quality_console", "Transcript and summary quality", "quality-console.html"),
         ("review_html", "审核页面", "review.html"),
-        ("transcript_editor_html", "转写编辑器", "transcript-editor.html"),
+        ("subtitle_editor_html", "双轨字幕编辑器", "subtitle-editor.html"),
+        ("transcript_editor_html", "旧版转写编辑器", "transcript-editor.html"),
         ("smart_summary_section_editor_html", "智能总结章节编辑器", "smart-summary-section-editor.html"),
         ("review_closure_status", "复核关闭进度", "review-closure-status.md"),
         ("review_pack", "复核包", "review-pack.md"),
@@ -1448,7 +1463,7 @@ def _render_workbench_html(result: dict[str, Any], rows: list[dict[str, Any]]) -
     <div class="toolbar">
       <button onclick="openArtifact('task_console')">任务控制台</button>
       <button onclick="openArtifact('review_html')">审核页</button>
-      <button onclick="openArtifact('transcript_editor_html')">转写编辑</button>
+      <button onclick="openArtifact('subtitle_editor_html')">双轨字幕编辑</button>
       <button onclick="openArtifact('smart_summary_section_editor_html')">章节编辑</button>
     </div>
   </header>
@@ -1879,7 +1894,7 @@ def _transcript_arbitration_panel_html(arbitration: dict[str, Any]) -> str:
     """
     command_html = "".join("<pre>" + html.escape(str(cmd)) + "</pre>" for cmd in (arbitration.get("next_commands") or [])[:3])
     policy_html = "<div class=\"muted\">策略：" + html.escape(str(policy.get("guidance") or "")) + "</div>"
-    toolbar = '<div class="toolbar"><button onclick="setFilter(\'transcript_source_conflict\')">筛字幕冲突</button><button onclick="openArtifact(\'transcript_source_arbitration_markdown\')">打开仲裁报告</button><button onclick="openArtifact(\'transcript_editor_html\')">打开转写编辑</button></div>' + policy_html + command_html
+    toolbar = '<div class="toolbar"><button onclick="setFilter(\'transcript_source_conflict\')">筛字幕冲突</button><button onclick="openArtifact(\'transcript_source_arbitration_markdown\')">打开仲裁报告</button><button onclick="openArtifact(\'subtitle_editor_html\')">打开双轨字幕编辑</button></div>' + policy_html + command_html
     if not rows:
         return metrics + toolbar + "<div class=\"muted\">没有发现字幕/ASR 冲突。</div>"
     cards = []
@@ -1928,7 +1943,7 @@ def _review_closure_panel_html(closure: dict[str, Any]) -> str:
         <div class=\"closure-metric {cls}\"><span class=\"muted\">字幕仲裁待复核</span><strong>{int(arbitration.get('open') or 0)}</strong></div>
         <div class=\"closure-metric closure-ok\"><span class=\"muted\">字幕仲裁已关闭</span><strong>{int(arbitration.get('closed') or 0)}</strong></div>
       </div>
-      <div class=\"toolbar\"><button onclick=\"openArtifact('review_closure_status')\">查看关闭报告</button><button onclick=\"openArtifact('transcript_editor_html')\">打开转写编辑</button></div>
+      <div class=\"toolbar\"><button onclick=\"openArtifact('review_closure_status')\">查看关闭报告</button><button onclick=\"openArtifact('subtitle_editor_html')\">打开双轨字幕编辑</button></div>
       <div class=\"muted\" style=\"margin-top:6px\">报告：<a href=\"{report}\">review-closure-status.md</a></div>
     """
 

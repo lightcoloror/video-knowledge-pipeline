@@ -197,6 +197,8 @@ from .transcript_evidence_correction_pipeline import run_transcript_evidence_cor
 from .transcript_main_route_status import transcript_main_route_status
 from .transcript_source_arbitration import arbitrate_transcript_sources
 from .transcript_editor import apply_transcript_edits, prepare_transcript_edit_session
+from .subtitle_editor import apply_subtitle_review, validate_subtitle_review
+from .subtitle_editor_ui import prepare_subtitle_editor
 from .transcript_resegment import resegment_transcript
 from .transcript_postprocess import postprocess_asr_transcript
 from .transcript_translation import translate_transcript_to_mandarin
@@ -1365,6 +1367,16 @@ def main(argv: list[str] | None = None) -> int:
         result = prepare_transcript_edit_session(args.bundle_dir, write=not args.no_write)
     elif args.command == "apply-transcript-edits":
         result = apply_transcript_edits(args.bundle_dir, edits_json=args.edits_json, write=not args.no_write)
+    elif args.command == "prepare-subtitle-editor":
+        result = prepare_subtitle_editor(args.bundle_dir, write=not args.no_write)
+    elif args.command == "validate-subtitle-review":
+        result = validate_subtitle_review(args.bundle_dir, args.review_json)
+    elif args.command == "apply-subtitle-review":
+        result = apply_subtitle_review(
+            args.bundle_dir,
+            review_json=args.review_json,
+            write=not args.no_write,
+        )
     elif args.command == "transcript-correction-pack":
         result = build_transcript_correction_pack(
             args.bundle_dir,
@@ -3973,6 +3985,29 @@ def build_parser() -> argparse.ArgumentParser:
     apply_transcript_editor.add_argument("bundle_dir")
     apply_transcript_editor.add_argument("--edits-json", required=True)
     apply_transcript_editor.add_argument("--no-write", action="store_true")
+
+    prepare_subtitle_editor_parser = sub.add_parser(
+        "prepare-subtitle-editor",
+        help="Write the standalone dual-track VKP subtitle editor for one bundle",
+    )
+    prepare_subtitle_editor_parser.add_argument("bundle_dir")
+    prepare_subtitle_editor_parser.add_argument("--no-write", action="store_true")
+
+    validate_subtitle_review_parser = sub.add_parser(
+        "validate-subtitle-review",
+        help="Validate subtitle_review_notes.v1 without changing the bundle",
+    )
+    validate_subtitle_review_parser.add_argument("bundle_dir")
+    validate_subtitle_review_parser.add_argument("--review-json", required=True)
+
+    apply_subtitle_review_parser = sub.add_parser(
+        "apply-subtitle-review",
+        help="Apply a human-confirmed dual-track subtitle review as derived sidecars",
+    )
+    apply_subtitle_review_parser.add_argument("bundle_dir")
+    apply_subtitle_review_parser.add_argument("--review-json", required=True)
+    apply_subtitle_review_parser.add_argument("--no-write", action="store_true")
+
     transcript_correction = sub.add_parser("transcript-correction-pack", help="Build/import/execute a BiliNote-style transcript correction pack")
     transcript_correction.add_argument("bundle_dir")
     transcript_correction.add_argument("--input-json", default="", help="Import a JSON correction response with segments[index,text]")

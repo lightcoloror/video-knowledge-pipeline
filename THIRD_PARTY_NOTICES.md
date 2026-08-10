@@ -1,6 +1,6 @@
 # Third-party notices
 
-Updated: 2026-08-05 13:51:38 +08:00 by Codex (GPT-5.6)
+Updated: 2026-08-10 18:14:34 +08:00 by Codex (GPT-5.6 Sol)
 
 VKP's own source is licensed under `AGPL-3.0-only`. That license does not replace the licenses of third-party packages, browser assets, independently installed tools, model weights, datasets, or hosted APIs.
 
@@ -11,6 +11,7 @@ This document is an attribution and boundary record, not legal advice. The commi
 | Component | Version / source | License | Distribution boundary |
 |---|---|---|---|
 | WaveSurfer.js and Regions plugin | 7.12.11, `katspaugh/wavesurfer.js` | BSD-3-Clause | Minified browser assets are vendored under `src/video_knowledge_pipeline/static/wavesurfer-7.12.11/`; the full upstream license is retained beside them. |
+| Moyf/moys-asr-workflow web editor | v1.3.1, `949bc84058cdae1d9c021c50203e6d2742f9392c` | AGPL-3.0-only | Eight root `web/` assets are vendored under `src/video_knowledge_pipeline/static/moys-subtitle-editor/`. VKP adds two explicit adapter slots and separate VKP CSS/JS; launcher, provider/API-key UI, server, model code, and FFmpeg orchestration are excluded. |
 
 No model weights, customer media, production transcripts, or evaluation datasets are distributed in this repository.
 

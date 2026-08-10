@@ -2013,3 +2013,13 @@ At the time recorded above, every untracked `src/video_knowledge_pipeline/*.py` 
 | pyannote.metrics + MeetEval | 既有固定版本 | **existing evaluation reused / production promotion pending** | 意图：用 DER/JER 与 cpCER/tcpCER 验收误合并、误拆分和说话人文字归属；决策：不自研评分器；理由：标签稳定不等于分人准确；证据：既有真实 A/B 已证明 CAM++ 仍需质量门；生效范围：评测与晋级，不影响生成；回滚：保持 candidate-only。 |
 
 明确拒绝：自动推断真人姓名、同一来源自匹配、无确认保存生物特征、把私有向量写入公开 Bundle/Git/在线请求、跨视频静默扫描或自动 local/cloud fallback。详细记录：`docs/speaker-global-alignment-and-cross-video-voiceprint-2026-08-10.md`。
+
+## 2026-08-10 moys-asr-workflow 完整字幕编辑器
+
+更新时间：2026-08-10 18:14:34 +08:00 | Codex / GPT-5.6 Sol
+
+| 上游模块 | 固定版本 | 状态 | 意图 / 决策 / 理由 / 证据 / 生效范围 / 回滚 |
+| --- | --- | --- | --- |
+| Moyf/moys-asr-workflow `web/` editor | `v1.3.1` / `949bc84058cdae1d9c021c50203e6d2742f9392c` / AGPL-3.0-only | **complete browser shell vendored + VKP dual-track adapter implemented** | 意图：复用成熟播放器、字幕、波形、工作区、快捷键、边界、撤销、颜色、贴纸、静音区和导出 UI；决策：仅 vendoring 8 个 `web/` 根资源，模板增加两个明确 adapter slot，VKP 另加 source/mandarin 双轨、lineage、localStorage 草稿和 loopback 正式应用；理由：不重写已测试算法，也不让上游工程成为逐字稿真源；证据：上游 JS 92/92、七个未改静态文件 SHA 7/7 一致、VKP 新合同/HTTP 10/10、相关回归 21/21；生效范围：Bundle 派生字幕审核与导出，原 ASR/翻译/Timeline 不变；回滚：删除新静态目录和入口，旧 `transcript-editor.html` 保持。详细记录：`docs/moys-asr-workflow-subtitle-editor-integration-2026-08-10.md`。 |
+
+明确拒绝：上游 launcher、Qwen/FunASR/Soniox、API Key 设置、桌面壳、服务器、第二套 FFmpeg/ASR 调度、任意绝对贴纸路径和媒体剪切执行。

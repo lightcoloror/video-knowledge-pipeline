@@ -374,7 +374,7 @@ def _render_editor_html(session: dict[str, Any]) -> str:
   </style>
 </head>
 <body>
-  <header><h1>{title}</h1><div class="muted">BiliNote 风格转录编辑器：逐段校正 ASR/字幕，导出 JSON 后再用 CLI/MCP 显式导入。</div></header>
+  <header><h1>{title}</h1><div class="muted">旧版兼容入口：逐段校正 ASR/字幕，导出 JSON 后再用 CLI/MCP 显式导入。建议改用 <a href="subtitle-editor.html">新版双轨字幕编辑器</a>，获得播放器、波形、粤语/普通话双轨与显式 VKP 写回。</div></header>
   <main>
     <section class="panel toolbar"><input id="filter" placeholder="搜索转录、术语或时间戳" oninput="renderRows()"><button onclick="markAllUnchanged()">全部标记未改</button><button onclick="exportEdits()">生成 edits JSON</button><button onclick="copyEdits()">复制 JSON</button><a href="{template_name}"><button type="button">打开模板</button></a></section>
     <section id="rows" class="panel"></section>
