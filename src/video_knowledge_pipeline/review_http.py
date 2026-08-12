@@ -11,12 +11,17 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from .review_writeback import apply_review_payload_to_bundle
 from .lecture_package import resolve_review_media_path
 from .shot_review import apply_shot_review_notes
-from .subtitle_editor import apply_subtitle_review, build_subtitle_editor_projection, validate_subtitle_review
+from .subtitle_editor import (
+    apply_subtitle_review,
+    build_subtitle_editor_projection,
+    subtitle_translation_slice,
+    validate_subtitle_review,
+)
 from .subtitle_editor_ui import render_subtitle_editor_page
 from .video_workbench import export_video_workbench
 from .storage import read_json
@@ -60,7 +65,8 @@ class ReviewHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         if not self._host_allowed():
             return self._json_error(HTTPStatus.MISDIRECTED_REQUEST, "invalid Host header")
-        path = urlsplit(self.path).path
+        parsed_url = urlsplit(self.path)
+        path = parsed_url.path
         if path in {"/", "/review.html"}:
             return self._serve_review_html()
         if path in {"/workbench", "/video-workbench.html"}:
@@ -69,6 +75,20 @@ class ReviewHandler(BaseHTTPRequestHandler):
             return self._serve_subtitle_editor_html()
         if path == "/api/subtitle-editor/project":
             return self._json_response(build_subtitle_editor_projection(self.bundle_dir, write=False))
+        if path == "/api/subtitle-editor/translations":
+            try:
+                query = parse_qs(parsed_url.query, keep_blank_values=True)
+                generation = int((query.get("generation") or ["0"])[0] or 0)
+                return self._json_response(
+                    subtitle_translation_slice(
+                        self.bundle_dir,
+                        projection_sha256=str((query.get("projection_sha256") or [""])[0]),
+                        segment_ids=[str(value) for value in query.get("segment_id") or []],
+                        generation=generation,
+                    )
+                )
+            except (TypeError, ValueError) as exc:
+                return self._json_error(HTTPStatus.BAD_REQUEST, str(exc))
         if path == "/api/review/status":
             return self._json_response(
                 {
@@ -240,6 +260,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
             self.bundle_dir,
             projection=projection,
             csrf_token=self.csrf_token,
+            lazy_translation=True,
         )
         payload = html_text.encode("utf-8")
         self.send_response(HTTPStatus.OK)

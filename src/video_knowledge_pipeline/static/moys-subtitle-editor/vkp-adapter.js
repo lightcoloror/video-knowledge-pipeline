@@ -14,6 +14,12 @@
   const draftKey = `vkp:subtitle-editor:${cfg.bundleId}:${cfg.projection.projection_sha256}`;
   let lastDraftJson = '';
   let formallyApplied = false;
+  let translationGeneration = 0;
+  let translationAbortController = null;
+  let translationObserver = null;
+  let transcriptMode = 'bilingual';
+  const pendingTranslationIds = new Set();
+  const timestampNotes = new Map();
 
   function normalizedSegment(segment, index) {
     const sourceIds = Array.isArray(segment.source_segment_ids) && segment.source_segment_ids.length
@@ -31,6 +37,8 @@
       speaker_role: String(segment.speaker_role || ''),
       source_text: String(segment.text || '').trim(),
       mandarin_text: String(segment.mandarin_text || '').trim(),
+      mandarin_loaded: segment.mandarin_loaded !== false,
+      translation_available: Boolean(segment.translation_available),
       words: Array.isArray(segment.items)
         ? segment.items.map((item) => ({
             text: String(item.text || ''),
@@ -47,11 +55,15 @@
   }
 
   function reviewNotes(humanConfirmed) {
+    const currentSegmentIds = new Set(DATA.segments.map((segment) => String(segment.segment_id)));
     return {
       schema: 'video_knowledge_pipeline.subtitle_review_notes.v1',
       projection_sha256: cfg.projection.projection_sha256,
       source_sha256: cfg.projection.source_sha256,
       segments: DATA.segments.map(normalizedSegment),
+      timestamp_notes: [...timestampNotes.values()]
+        .filter((note) => currentSegmentIds.has(String(note.segment_id)))
+        .map((note) => ({ ...note })),
       gap_remove: DATA.gap_remove ? JSON.parse(JSON.stringify(DATA.gap_remove)) : null,
       human_confirmed: Boolean(humanConfirmed),
     };
@@ -92,6 +104,8 @@
         end: segment.end_ms,
         text: segment.source_text,
         mandarin_text: segment.mandarin_text || '',
+        mandarin_loaded: segment.mandarin_loaded !== false,
+        translation_available: Boolean(segment.translation_available || segment.mandarin_text),
         segment_id: segment.segment_id,
         source_segment_ids: segment.source_segment_ids,
         source_lineage_ids: segment.source_lineage_ids || segment.source_segment_ids,
@@ -110,6 +124,10 @@
         timing_status: String(segment.timing_status || 'ready'),
         _dirty: true,
       }));
+      timestampNotes.clear();
+      (draft.timestamp_notes || []).forEach((note) => {
+        if (note && note.note_id && note.segment_id) timestampNotes.set(String(note.note_id), { ...note });
+      });
       lastDraftJson = raw;
       renderAll();
       setState('已恢复本地草稿 · 尚未写回 VKP', 'draft');
@@ -123,12 +141,117 @@
       ? DATA.segments[currentCuePanelIdx] : null;
   }
 
+  function sourceQuoteForSegment(segment) {
+    if (!segment) return '';
+    const wanted = new Set((segment.source_lineage_ids || segment.source_segment_ids || []).map(String));
+    return originalSegments
+      .filter((source) => (source.source_lineage_ids || source.source_segment_ids || [])
+        .some((lineage) => wanted.has(String(lineage))))
+      .map((source) => String(source.source_text || '').trim())
+      .filter(Boolean)
+      .join(' ');
+  }
+
+  function bumpTranslationGeneration() {
+    translationGeneration += 1;
+    translationAbortController?.abort();
+    translationAbortController = null;
+    pendingTranslationIds.clear();
+  }
+
+  let translationFlushTimer = null;
+  let translationRequestInFlight = false;
+
+  function queueTranslation(segmentId) {
+    if (!cfg.lazyTranslation || transcriptMode === 'original') return;
+    const segment = DATA.segments.find((row) => String(row.segment_id) === String(segmentId));
+    if (!segment || segment.mandarin_loaded !== false || !segment.translation_available) return;
+    pendingTranslationIds.add(String(segmentId));
+    if (translationFlushTimer) return;
+    translationFlushTimer = window.setTimeout(flushTranslationQueue, 30);
+  }
+
+  async function flushTranslationQueue() {
+    translationFlushTimer = null;
+    if (translationRequestInFlight || !pendingTranslationIds.size) return;
+    const ids = [...pendingTranslationIds].slice(0, 4);
+    ids.forEach((id) => pendingTranslationIds.delete(id));
+    const generation = translationGeneration;
+    const params = new URLSearchParams({
+      projection_sha256: cfg.projection.projection_sha256,
+      generation: String(generation),
+    });
+    ids.forEach((id) => params.append('segment_id', id));
+    translationRequestInFlight = true;
+    translationAbortController = new AbortController();
+    try {
+      const response = await fetch(`${cfg.translationUrl}?${params}`, {
+        signal: translationAbortController.signal,
+        headers: { Accept: 'application/json' },
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+      if (generation !== translationGeneration || Number(payload.generation) !== generation) return;
+      (payload.segments || []).forEach((row) => {
+        const segment = DATA.segments.find((candidate) => String(candidate.segment_id) === String(row.segment_id));
+        if (!segment) return;
+        segment.mandarin_text = String(row.text || '');
+        segment.mandarin_loaded = true;
+        segment.translation_available = row.status === 'ready';
+      });
+      syncMandarinEditor();
+      refreshMandarinPreviews();
+    } catch (error) {
+      if (error?.name !== 'AbortError' && generation === translationGeneration) {
+        ids.forEach((id) => {
+          const segment = DATA.segments.find((candidate) => String(candidate.segment_id) === id);
+          if (segment) segment.translation_load_error = String(error.message || error);
+        });
+        refreshMandarinPreviews();
+      }
+    } finally {
+      translationRequestInFlight = false;
+      translationAbortController = null;
+      if (pendingTranslationIds.size) translationFlushTimer = window.setTimeout(flushTranslationQueue, 0);
+    }
+  }
+
+  function installTranslationObserver() {
+    translationObserver?.disconnect();
+    translationObserver = null;
+    if (!cfg.lazyTranslation || transcriptMode === 'original' || !('IntersectionObserver' in window)) return;
+    const generation = translationGeneration;
+    translationObserver = new IntersectionObserver((entries) => {
+      if (generation !== translationGeneration) return;
+      entries.filter((entry) => entry.isIntersecting).forEach((entry) => {
+        const index = Number(entry.target.dataset.idx);
+        const segment = DATA.segments[index];
+        if (segment) queueTranslation(segment.segment_id);
+      });
+    }, { rootMargin: '240px 0px' });
+    document.querySelectorAll('.cue[data-idx]').forEach((cue) => translationObserver.observe(cue));
+  }
+
+  function setTranscriptMode(mode) {
+    if (!['original', 'mandarin', 'bilingual'].includes(mode)) return;
+    bumpTranslationGeneration();
+    transcriptMode = mode;
+    document.body.dataset.vkpTranscriptMode = mode;
+    document.querySelectorAll('[data-vkp-transcript-mode]').forEach((button) => {
+      button.setAttribute('aria-pressed', String(button.dataset.vkpTranscriptMode === mode));
+    });
+    installTranslationObserver();
+    syncMandarinEditor();
+    refreshMandarinPreviews();
+  }
+
   function syncMandarinEditor() {
     const input = document.getElementById('vkp-mandarin-text');
     const warning = document.getElementById('vkp-translation-review');
     if (!input) return;
     const segment = currentSegment();
     input.disabled = !segment;
+    if (segment?.mandarin_loaded === false) queueTranslation(segment.segment_id);
     if (document.activeElement !== input) input.value = segment?.mandarin_text || '';
     if (warning) {
       warning.hidden = !segment?.needs_translation_review;
@@ -148,9 +271,57 @@
         preview = document.createElement('div');
         preview.className = 'vkp-mandarin-preview';
         anchor.insertAdjacentElement('afterend', preview);
+        preview.addEventListener('click', () => queueTranslation(DATA.segments[Number(cue.dataset.idx)]?.segment_id));
       }
-      preview.textContent = segment.mandarin_text || '';
+      preview.dataset.translationState = segment.mandarin_loaded === false
+        ? (segment.translation_load_error ? 'error' : 'loading')
+        : (segment.mandarin_text ? 'ready' : 'missing');
+      preview.textContent = segment.mandarin_loaded === false
+        ? (segment.translation_load_error ? '翻译加载失败，点击重试' : '翻译将在进入视口时加载…')
+        : (segment.mandarin_text || '（暂无普通话翻译）');
     });
+  }
+
+  function syncTimestampNoteEditor() {
+    const segment = currentSegment();
+    const original = document.getElementById('vkp-note-original');
+    const polished = document.getElementById('vkp-note-polished');
+    const noteText = document.getElementById('vkp-note-text');
+    const deleteButton = document.getElementById('vkp-note-delete');
+    if (!original || !polished || !noteText) return;
+    const noteId = segment ? `note:${segment.segment_id}` : '';
+    const note = noteId ? timestampNotes.get(noteId) : null;
+    const quote = sourceQuoteForSegment(segment);
+    original.textContent = quote || '当前段没有可绑定的原始证据';
+    polished.disabled = noteText.disabled = !segment || !quote;
+    if (document.activeElement !== polished) polished.value = note?.polished_quote || '';
+    if (document.activeElement !== noteText) noteText.value = note?.note_text || '';
+    if (deleteButton) deleteButton.disabled = !note;
+  }
+
+  function updateTimestampNote() {
+    const segment = currentSegment();
+    if (!segment) return;
+    const originalQuote = sourceQuoteForSegment(segment);
+    if (!originalQuote) return;
+    const noteId = `note:${segment.segment_id}`;
+    const polishedQuote = String(document.getElementById('vkp-note-polished')?.value || '').trim();
+    const noteText = String(document.getElementById('vkp-note-text')?.value || '').trim();
+    if (!polishedQuote && !noteText) {
+      timestampNotes.delete(noteId);
+    } else {
+      timestampNotes.set(noteId, {
+        note_id: noteId,
+        segment_id: String(segment.segment_id),
+        source_segment_ids: [...(segment.source_segment_ids || [])],
+        timestamp_ms: Math.round(Number(segment.start || 0)),
+        original_quote: originalQuote,
+        polished_quote: polishedQuote,
+        note_text: noteText,
+      });
+    }
+    persistDraft();
+    syncTimestampNoteEditor();
   }
 
   function installChrome() {
@@ -161,6 +332,11 @@
     bar.className = 'vkp-review-bar';
     bar.innerHTML = `
       <strong>VKP 双轨字幕审核</strong>
+      <span class="vkp-transcript-modes" role="group" aria-label="逐字稿显示模式">
+        <button type="button" data-vkp-transcript-mode="original">原文</button>
+        <button type="button" data-vkp-transcript-mode="mandarin">中文</button>
+        <button type="button" data-vkp-transcript-mode="bilingual" aria-pressed="true">双语</button>
+      </span>
       <span class="vkp-boundary-note">${cfg.projection.timing_review?.status === 'needs_review'
         ? `检测到 ${cfg.projection.timing_review.overlap_count} 处原始时间重叠，必须校正后才能正式写回；`
         : ''}原始 ASR / Timeline 不会被覆盖；静音区与剪辑导出仅生成计划</span>
@@ -209,12 +385,34 @@
         const segment = currentSegment();
         if (!segment) return;
         segment.mandarin_text = input.value;
+        segment.mandarin_loaded = true;
+        segment.translation_available = Boolean(input.value.trim());
         segment.needs_translation_review = false;
         segment._dirty = true;
         persistDraft();
         refreshMandarinPreviews();
       });
+      const noteWrap = document.createElement('div');
+      noteWrap.className = 'vkp-timestamp-note-wrap';
+      noteWrap.innerHTML = `
+        <label class="vkp-track-label">时间戳笔记（派生内容，不覆盖原话）</label>
+        <div class="vkp-note-original" id="vkp-note-original"></div>
+        <textarea id="vkp-note-polished" rows="2" placeholder="可选：润色后的摘录"></textarea>
+        <textarea id="vkp-note-text" rows="3" placeholder="写下与当前时间点绑定的笔记"></textarea>
+        <button type="button" id="vkp-note-delete">删除本段笔记</button>`;
+      source.parentElement.appendChild(noteWrap);
+      noteWrap.querySelector('#vkp-note-polished').addEventListener('input', updateTimestampNote);
+      noteWrap.querySelector('#vkp-note-text').addEventListener('input', updateTimestampNote);
+      noteWrap.querySelector('#vkp-note-delete').addEventListener('click', () => {
+        const segment = currentSegment();
+        if (segment) timestampNotes.delete(`note:${segment.segment_id}`);
+        persistDraft();
+        syncTimestampNoteEditor();
+      });
     }
+    document.querySelectorAll('[data-vkp-transcript-mode]').forEach((button) => {
+      button.addEventListener('click', () => setTranscriptMode(button.dataset.vkpTranscriptMode));
+    });
   }
 
   async function postReview(path, humanConfirmed) {
@@ -261,13 +459,16 @@
   setCurrentCuePanelIndex = function vkpSetCurrentCuePanelIndex(index) {
     upstreamSetCurrentCuePanelIndex(index);
     syncMandarinEditor();
+    syncTimestampNoteEditor();
   };
 
   const upstreamRenderAll = renderAll;
   renderAll = function vkpRenderAll() {
     upstreamRenderAll();
     syncMandarinEditor();
+    syncTimestampNoteEditor();
     refreshMandarinPreviews();
+    installTranslationObserver();
   };
 
   const upstreamBuildJson = buildJson;
@@ -300,6 +501,11 @@
     const sourceIds = [...(before.source_segment_ids || [before.segment_id])];
     const lineageIds = [...(before.source_lineage_ids || sourceIds)];
     const translation = String(before.mandarin_text || '');
+    if (before.mandarin_loaded === false) {
+      queueTranslation(before.segment_id);
+      flashHint('请等待当前段普通话翻译加载后再拆分');
+      return;
+    }
     const translationInput = document.getElementById('vkp-mandarin-text');
     const translationCursor = translationInput?.selectionStart ?? 0;
     if (translation && (translationCursor <= 0 || translationCursor >= translation.length)) {
@@ -337,6 +543,11 @@
   mergeSegments = function vkpMergeSegments(indexes) {
     const sorted = [...new Set(indexes)].sort((a, b) => a - b);
     const segments = sorted.map((index) => DATA.segments[index]).filter(Boolean);
+    if (segments.some((segment) => segment.mandarin_loaded === false)) {
+      segments.forEach((segment) => queueTranslation(segment.segment_id));
+      flashHint('请等待所选段普通话翻译加载后再合并');
+      return;
+    }
     const speakers = new Set(segments.map((segment) => segment.speaker_global_id || segment.speaker || '').filter(Boolean));
     if (speakers.size > 1) {
       flashHint('不同全局说话人的字幕禁止自动合并');
@@ -376,6 +587,7 @@
 
   installChrome();
   restoreDraft();
+  setTranscriptMode('bilingual');
   renderAll();
   document.getElementById('vkp-validate-review')?.addEventListener('click', validateDraft);
   document.getElementById('vkp-apply-review')?.addEventListener('click', applyReview);

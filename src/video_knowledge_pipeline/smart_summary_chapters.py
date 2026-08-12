@@ -17,6 +17,7 @@ from .term_text import apply_term_replacement_pairs, load_bundle_term_replacemen
 from .transcript import format_timestamp
 
 SCHEMA = "video_knowledge_pipeline.smart_summary_chapters.v1"
+TIMELINE_COVERAGE_SCHEMA = "video_knowledge_pipeline.chapter_timeline_coverage.v1"
 
 TEACHING_TERMS = (
     "核心", "关键", "原则", "方法", "步骤", "流程", "问题", "需求", "客户", "信任", "成交", "复盘", "动作", "案例", "工具", "策略", "注意", "总结", "因为", "所以", "但是", "如果", "一定", "必须", "不要", "不能", "应该", "可以",
@@ -79,6 +80,12 @@ def build_smart_summary_chapter_pack(
         target_chapters=max(1, int(target_chapters or 1)),
         chapter_plan=semantic_plan if chapter_mode == "semantic" else None,
     )
+    duration_seconds = max((_seconds(row.get("end")) for row in segments), default=0.0)
+    timeline_coverage_quality = evaluate_chapter_timeline_coverage(
+        chapters,
+        segments,
+        duration_seconds=duration_seconds,
+    )
     course_map = _course_map(note_title, chapters, term_summary, visual_digest)
     result = {
         "schema": SCHEMA,
@@ -89,10 +96,11 @@ def build_smart_summary_chapter_pack(
         "chapter_mode": chapter_mode,
         "semantic_chapter_plan": str(root / "exports" / "semantic-chapter-plan.json") if chapter_mode == "semantic" else "",
         "chapter_count": len(chapters),
-        "duration_seconds": max((_seconds(row.get("end")) for row in segments), default=0.0),
+        "duration_seconds": duration_seconds,
         "course_map": course_map,
         "chapters": chapters,
-        "quality_notes": _quality_notes(pack, chapters),
+        "timeline_coverage_quality": timeline_coverage_quality,
+        "quality_notes": _quality_notes(pack, chapters, timeline_coverage_quality),
         "artifacts": {
             "json": str(root / "exports" / "smart-summary-chapters.json"),
             "markdown": str(root / "exports" / "smart-summary-chapters.md"),
@@ -123,13 +131,25 @@ def build_smart_summary_chapter_pack(
         write_json(manifest_path, manifest)
         result["run_registry"] = _register_run(root, result, write=write)
         if progress:
-            terminal = "completed" if chapters else "failed"
+            terminal = (
+                "completed"
+                if chapters and timeline_coverage_quality["passed"]
+                else ("degraded" if chapters else "failed")
+            )
             progress.emit(
                 stage="finalize",
                 percent=100,
                 current_item=len(chapters),
                 total_items=len(chapters),
-                message="Smart summary chapter pack completed" if chapters else "Smart summary chapter pack produced no chapters",
+                message=(
+                    "Smart summary chapter pack completed"
+                    if terminal == "completed"
+                    else (
+                        "Smart summary chapters need timeline coverage review"
+                        if chapters
+                        else "Smart summary chapter pack produced no chapters"
+                    )
+                ),
                 status=terminal,
                 output_paths=[exports / "smart-summary-chapters.json", exports / "course-map.json"],
                 report_paths=[exports / "smart-summary-chapters.md"],
@@ -138,6 +158,94 @@ def build_smart_summary_chapter_pack(
             result["progress"] = progress.artifacts()
             write_json(exports / "smart-summary-chapters.json", result)
     return result
+
+
+def evaluate_chapter_timeline_coverage(
+    chapters: list[dict[str, Any]],
+    transcript_segments: list[dict[str, Any]],
+    *,
+    duration_seconds: float | None = None,
+) -> dict[str, Any]:
+    """Deterministically validate first/last coverage and timestamp ranges.
+
+    Intent: adopt YouTube Digest's full-timeline chapter requirement as a
+    machine gate. Decision: verify actual chapter timestamps against preserved
+    transcript bounds rather than trust a prompt instruction. Reason: a model
+    can produce plausible chapters while omitting the opening/ending or inventing
+    out-of-range timestamps. Evidence: YouTube Digest 1.1.5
+    ``prompts/analysis.md:12-13,43-60``. Effective scope: derived Smart Summary
+    chapter readiness only; transcript and Timeline remain unchanged.
+    """
+
+    transcript_rows = [row for row in transcript_segments if isinstance(row, dict)]
+    chapter_rows = [row for row in chapters if isinstance(row, dict)]
+    if not transcript_rows or not chapter_rows:
+        return {
+            "schema": TIMELINE_COVERAGE_SCHEMA,
+            "passed": False,
+            "status": "missing_input",
+            "checks": [
+                {
+                    "key": "input_present",
+                    "passed": False,
+                    "detail": f"chapters={len(chapter_rows)}, transcript_segments={len(transcript_rows)}",
+                }
+            ],
+        }
+    transcript_start = min(_seconds(row.get("start")) for row in transcript_rows)
+    transcript_end = max(_seconds(row.get("end")) for row in transcript_rows)
+    if duration_seconds is not None:
+        transcript_end = max(transcript_end, _seconds(duration_seconds))
+    span = max(0.0, transcript_end - transcript_start)
+    tolerance = max(0.5, min(2.0, span * 0.002))
+    ranges: list[tuple[float, float]] = [
+        (_seconds(row.get("start")), _seconds(row.get("end"))) for row in chapter_rows
+    ]
+    timestamp_range_valid = all(
+        start >= transcript_start - tolerance
+        and end > start
+        and end <= transcript_end + tolerance
+        for start, end in ranges
+    )
+    ordered = all(
+        ranges[index][0] >= ranges[index - 1][1] - tolerance
+        for index in range(1, len(ranges))
+    )
+    first_limit = transcript_start + span * 0.25
+    last_limit = transcript_start + span * 0.75
+    first_covered = ranges[0][0] <= first_limit + tolerance
+    last_covered = ranges[-1][1] >= last_limit - tolerance
+    checks = [
+        {
+            "key": "timestamp_range",
+            "passed": timestamp_range_valid,
+            "detail": f"transcript={transcript_start:.3f}-{transcript_end:.3f}; tolerance={tolerance:.3f}",
+        },
+        {
+            "key": "chapter_order",
+            "passed": ordered,
+            "detail": f"chapter_count={len(ranges)}",
+        },
+        {
+            "key": "first_quarter_covered",
+            "passed": first_covered,
+            "detail": f"first_chapter_start={ranges[0][0]:.3f}; limit={first_limit:.3f}",
+        },
+        {
+            "key": "last_quarter_covered",
+            "passed": last_covered,
+            "detail": f"last_chapter_end={ranges[-1][1]:.3f}; threshold={last_limit:.3f}",
+        },
+    ]
+    passed = all(bool(row["passed"]) for row in checks)
+    return {
+        "schema": TIMELINE_COVERAGE_SCHEMA,
+        "passed": passed,
+        "status": "passed" if passed else "needs_review",
+        "transcript_range": {"start": transcript_start, "end": transcript_end},
+        "chapter_range": {"start": ranges[0][0], "end": ranges[-1][1]},
+        "checks": checks,
+    }
 
 
 
@@ -246,6 +354,20 @@ def _register_run(root: Path, result: dict[str, Any], *, write: bool) -> dict[st
     failed_items: list[dict[str, Any]] = []
     if not chapters:
         failed_items.append({"id": "chapters", "reason": "missing_chapters", "detail": "No smart-summary chapters were generated."})
+    coverage = result.get("timeline_coverage_quality")
+    if chapters and isinstance(coverage, dict) and not bool(coverage.get("passed")):
+        failed_checks = [
+            str(row.get("key") or "")
+            for row in coverage.get("checks") or []
+            if isinstance(row, dict) and not bool(row.get("passed"))
+        ]
+        failed_items.append(
+            {
+                "id": "timeline_coverage",
+                "reason": "chapter_timeline_coverage_failed",
+                "detail": ", ".join(failed_checks),
+            }
+        )
     for chapter in chapters:
         trace = chapter.get("evidence_trace") if isinstance(chapter.get("evidence_trace"), dict) else {}
         summary = trace.get("summary") if isinstance(trace.get("summary"), dict) else {}
@@ -660,17 +782,31 @@ def _chapter_title(index: int, sentences: list[str], visual_notes: list[dict[str
     return f"第 {index} 段"
 
 
-def _quality_notes(pack: dict[str, Any], chapters: list[dict[str, Any]]) -> list[str]:
+def _quality_notes(
+    pack: dict[str, Any],
+    chapters: list[dict[str, Any]],
+    timeline_coverage_quality: dict[str, Any],
+) -> list[str]:
     notes = []
     if not chapters:
         notes.append("No chapters were generated; smart summary should not be treated as final.")
     if pack.get("quality_notes"):
         notes.extend(str(note) for note in pack.get("quality_notes") or [])
+    if chapters and not bool(timeline_coverage_quality.get("passed")):
+        failed = [
+            str(row.get("key") or "")
+            for row in timeline_coverage_quality.get("checks") or []
+            if isinstance(row, dict) and not bool(row.get("passed"))
+        ]
+        notes.append(
+            "Chapter timeline coverage requires review: " + ", ".join(failed)
+        )
     return _dedupe(notes)
 
 
 def _render_chapters_markdown(result: dict[str, Any]) -> str:
-    lines = [f"# Smart Summary Chapters: {result.get('title')}", "", f"- Created: `{result.get('created_at')}`", f"- Transcript source: `{result.get('transcript_source')}`", f"- Chapter count: `{result.get('chapter_count')}`", ""]
+    coverage = result.get("timeline_coverage_quality") if isinstance(result.get("timeline_coverage_quality"), dict) else {}
+    lines = [f"# Smart Summary Chapters: {result.get('title')}", "", f"- Created: `{result.get('created_at')}`", f"- Transcript source: `{result.get('transcript_source')}`", f"- Chapter count: `{result.get('chapter_count')}`", f"- Timeline coverage: `{coverage.get('status') or 'unknown'}`", ""]
     for chapter in result.get("chapters") or []:
         trace = chapter.get("evidence_trace") if isinstance(chapter.get("evidence_trace"), dict) else {}
         trace_summary = trace.get("summary") if isinstance(trace.get("summary"), dict) else {}

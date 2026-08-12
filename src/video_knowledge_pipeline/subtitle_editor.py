@@ -28,6 +28,10 @@ REVIEW_SCHEMA = "video_knowledge_pipeline.subtitle_review_notes.v1"
 TRACK_SCHEMA = "video_knowledge_pipeline.human_reviewed_subtitle_track.v1"
 RECEIPT_SCHEMA = "video_knowledge_pipeline.subtitle_review_apply_receipt.v1"
 CORRECTED_SCHEMA = "video_knowledge_pipeline.human_corrected_transcript.v1"
+TRANSLATION_SLICE_SCHEMA = "video_knowledge_pipeline.subtitle_translation_slice.v1"
+TIMESTAMP_NOTES_SCHEMA = "video_knowledge_pipeline.subtitle_timestamp_notes.v1"
+TRANSLATION_BATCH_MAX_SEGMENTS = 4
+TRANSLATION_BATCH_MAX_SOURCE_CHARS = 1600
 
 
 def build_subtitle_editor_projection(
@@ -41,7 +45,7 @@ def build_subtitle_editor_projection(
     if not cues:
         raise ValueError("subtitle editor requires a non-empty transcript")
     supplemental = _load_supplemental_segment_metadata(root, manifest)
-    translations, translation_status = _load_translations(root, manifest)
+    translations, translation_status, translation_provenance = _load_translations(root, manifest)
     segments = [
         _projection_segment(
             cue,
@@ -60,6 +64,7 @@ def build_subtitle_editor_projection(
         "translation_status": translation_status,
         "media_duration_ms": media_duration_ms,
         "timing_review": timing_review,
+        "translation_provenance": translation_provenance,
     }
     source_sha256 = _sha256_json(source_payload)
     payload: dict[str, Any] = {
@@ -75,6 +80,8 @@ def build_subtitle_editor_projection(
         },
         "segments": segments,
         "timing_review": timing_review,
+        "translation_loading": _translation_loading_plan(segments),
+        "translation_provenance": translation_provenance,
         "operator_boundary": {
             "local_only": True,
             "no_provider_execution": True,
@@ -90,6 +97,73 @@ def build_subtitle_editor_projection(
         manifest["subtitle_editor_html"] = "subtitle-editor.html"
         write_json(root / "manifest.json", manifest)
     return payload
+
+
+def subtitle_translation_slice(
+    bundle_dir: str | Path,
+    *,
+    projection_sha256: str,
+    segment_ids: list[str],
+    generation: int = 0,
+) -> dict[str, Any]:
+    """Return an exact, bounded, read-only translation slice for the editor.
+
+    Intent: reuse YouTube Digest's viewport batching without adding a second
+    translation backend. Decision: serve only already-derived VKP translation
+    sidecars in stable-ID batches of at most four. Reason: viewport loading
+    should reduce initial page weight but must never trigger a Provider call or
+    attach text to a revised transcript. Evidence: YouTube Digest 1.1.5
+    ``sidepanel.js:1752-2050`` and ``background.js:1443-1467``. Effective
+    scope: loopback subtitle editor reads; source ASR and translation artifacts
+    remain immutable.
+    """
+
+    root = _require_bundle(bundle_dir)
+    current = build_subtitle_editor_projection(root, write=False)
+    if str(projection_sha256 or "") != str(current["projection_sha256"]):
+        raise ValueError("projection_sha256 mismatch: Bundle inputs changed; reload the editor")
+    requested = [str(value or "").strip() for value in segment_ids]
+    if not requested or len(requested) > TRANSLATION_BATCH_MAX_SEGMENTS:
+        raise ValueError(
+            f"segment_ids must contain 1-{TRANSLATION_BATCH_MAX_SEGMENTS} stable IDs"
+        )
+    if any(not value for value in requested) or len(set(requested)) != len(requested):
+        raise ValueError("segment_ids must be non-empty and unique")
+    by_id = {str(row["segment_id"]): row for row in current["segments"]}
+    unknown = [value for value in requested if value not in by_id]
+    if unknown:
+        raise ValueError(f"unknown subtitle segment IDs: {unknown}")
+    rows = []
+    source_chars = 0
+    for segment_id in requested:
+        segment = by_id[segment_id]
+        source_chars += len(str(segment.get("source_text") or ""))
+        translation = str(segment.get("mandarin_text") or "")
+        rows.append(
+            {
+                "segment_id": segment_id,
+                "source_segment_ids": list(segment.get("source_segment_ids") or []),
+                "text": translation,
+                "status": "ready" if translation else "missing",
+            }
+        )
+    if source_chars > TRANSLATION_BATCH_MAX_SOURCE_CHARS and len(rows) > 1:
+        raise ValueError(
+            f"translation slice source text exceeds {TRANSLATION_BATCH_MAX_SOURCE_CHARS} characters"
+        )
+    return {
+        "schema": TRANSLATION_SLICE_SCHEMA,
+        "projection_sha256": current["projection_sha256"],
+        "generation": max(0, int(generation or 0)),
+        "segments": rows,
+        "missing_segment_ids": [row["segment_id"] for row in rows if row["status"] == "missing"],
+        "operator_boundary": {
+            "read_only": True,
+            "existing_sidecar_only": True,
+            "provider_execution": False,
+            "fallback": "show_source_only",
+        },
+    }
 
 
 def validate_subtitle_review(
@@ -118,6 +192,13 @@ def validate_subtitle_review(
     gap_remove = payload.get("gap_remove")
     if gap_remove is not None and not isinstance(gap_remove, dict):
         raise ValueError("gap_remove must be an object when present")
+    timestamp_notes = _validate_timestamp_notes(
+        payload.get("timestamp_notes"),
+        normalized,
+        current["segments"],
+    )
+    summary = _review_summary(current["segments"], normalized)
+    summary["timestamp_note_count"] = len(timestamp_notes)
     return {
         "ok": True,
         "schema": REVIEW_SCHEMA,
@@ -126,7 +207,8 @@ def validate_subtitle_review(
         "segments": normalized,
         "source_segments": current["segments"],
         "gap_remove": gap_remove if isinstance(gap_remove, dict) else None,
-        "summary": _review_summary(current["segments"], normalized),
+        "timestamp_notes": timestamp_notes,
+        "summary": summary,
     }
 
 
@@ -150,6 +232,7 @@ def apply_subtitle_review(
         "translation_status": "complete" if translation_complete else "incomplete",
         "segments": rows,
         "gap_remove": validated.get("gap_remove"),
+        "timestamp_notes": validated.get("timestamp_notes") or [],
         "operator_boundary": {
             "human_confirmed": True,
             "raw_asr_immutable": True,
@@ -202,6 +285,7 @@ def apply_subtitle_review(
         "source_sha256": validated["source_sha256"],
         "summary": validated["summary"],
         "translation_status": track_payload["translation_status"],
+        "timestamp_note_count": len(validated.get("timestamp_notes") or []),
         "invalidated_downstream": ["smart_summary", "final_combined_document", "subtitle_exports"],
         "preserved_sources": ["raw_asr", "timeline", "translation_source"],
     }
@@ -219,6 +303,22 @@ def apply_subtitle_review(
     with bundle_write_lock(root, operation="apply_subtitle_review"):
         manifest = _read_object(root / "manifest.json")
         write_json(root / "human-reviewed-subtitle-track.json", track_payload)
+        if validated.get("timestamp_notes"):
+            write_json(
+                root / "human-reviewed-timestamp-notes.json",
+                {
+                    "schema": TIMESTAMP_NOTES_SCHEMA,
+                    "created_at": now_iso(),
+                    "projection_sha256": validated["projection_sha256"],
+                    "source_sha256": validated["source_sha256"],
+                    "notes": validated["timestamp_notes"],
+                    "operator_boundary": {
+                        "human_confirmed": True,
+                        "derived_notes_only": True,
+                        "canonical_transcript_immutable": True,
+                    },
+                },
+            )
         write_json(root / "human-corrected-transcript.json", corrected_payload)
         (root / "human-corrected-transcript.md").write_text(
             _render_corrected_markdown(corrected_payload), encoding="utf-8"
@@ -271,6 +371,10 @@ def apply_subtitle_review(
                 "final_combined_document_status": "stale_after_subtitle_review",
             }
         )
+        if validated.get("timestamp_notes"):
+            manifest["human_reviewed_timestamp_notes_json"] = "human-reviewed-timestamp-notes.json"
+        else:
+            manifest.pop("human_reviewed_timestamp_notes_json", None)
         if translation_complete:
             manifest["human_reviewed_mandarin_srt"] = "human-reviewed-mandarin.srt"
             manifest["human_reviewed_mandarin_vtt"] = "human-reviewed-mandarin.vtt"
@@ -291,6 +395,8 @@ def apply_subtitle_review(
         {"key": "ffconcat_plan", "path": root / "human-reviewed.ffconcat"},
         {"key": "receipt", "path": root / "subtitle-review-apply-receipt.json"},
     ]
+    if validated.get("timestamp_notes"):
+        artifacts.append({"key": "timestamp_notes", "path": root / "human-reviewed-timestamp-notes.json"})
     if translation_complete:
         artifacts.extend(
             [
@@ -381,16 +487,19 @@ def _projection_words(value: Any, *, start_ms: int, end_ms: int) -> list[dict[st
     return result
 
 
-def _load_translations(root: Path, manifest: dict[str, Any]) -> tuple[dict[str, str], str]:
+def _load_translations(
+    root: Path,
+    manifest: dict[str, Any],
+) -> tuple[dict[str, str], str, dict[str, Any]]:
     raw = str(manifest.get("mandarin_translated_transcript_json") or "mandarin-translated-transcript.json").strip()
     path = Path(raw).expanduser()
     path = path if path.is_absolute() else root / path
     if not path.is_file():
-        return {}, "missing"
+        return {}, "missing", {"status": "missing", "artifact": ""}
     payload = _read_object(path)
     rows = payload.get("segments")
     if not isinstance(rows, list):
-        return {}, "invalid"
+        return {}, "invalid", {"status": "invalid", "artifact": path.name}
     result: dict[str, str] = {}
     for index, row in enumerate(rows):
         if not isinstance(row, dict):
@@ -400,7 +509,76 @@ def _load_translations(root: Path, manifest: dict[str, Any]) -> tuple[dict[str, 
         if text:
             result[key] = text
             result[f"index:{index}"] = text
-    return result, "ready" if result else "missing"
+    status = "ready" if result else "missing"
+    return result, status, {
+        "status": status,
+        "artifact": path.name if path.parent == root else str(path),
+        "artifact_sha256": _sha256_bytes(path.read_bytes()),
+        "schema": str(payload.get("schema") or ""),
+        "source_sha256": str(payload.get("source_sha256") or ""),
+        "route_id": str(payload.get("route_id") or ""),
+        "route_revision": str(payload.get("route_revision") or ""),
+        "derived_translation": True,
+    }
+
+
+def _translation_loading_plan(segments: list[dict[str, Any]]) -> dict[str, Any]:
+    """Build deterministic stable-ID batches without executing translation."""
+
+    batches: list[dict[str, Any]] = []
+    current: list[dict[str, Any]] = []
+    current_chars = 0
+    for segment in segments:
+        source_chars = len(str(segment.get("source_text") or ""))
+        would_overflow = bool(current) and (
+            len(current) >= TRANSLATION_BATCH_MAX_SEGMENTS
+            or current_chars + source_chars > TRANSLATION_BATCH_MAX_SOURCE_CHARS
+        )
+        if would_overflow:
+            batches.append(_translation_batch_row(len(batches), current))
+            current = []
+            current_chars = 0
+        current.append(segment)
+        current_chars += source_chars
+        if source_chars > TRANSLATION_BATCH_MAX_SOURCE_CHARS:
+            batches.append(_translation_batch_row(len(batches), current, oversized=True))
+            current = []
+            current_chars = 0
+    if current:
+        batches.append(_translation_batch_row(len(batches), current))
+    return {
+        "enabled": True,
+        "mode": "viewport_lazy_existing_sidecar",
+        "endpoint": "/api/subtitle-editor/translations",
+        "batch_max_segments": TRANSLATION_BATCH_MAX_SEGMENTS,
+        "batch_max_source_chars": TRANSLATION_BATCH_MAX_SOURCE_CHARS,
+        "stale_response_policy": "generation_token",
+        "missing_fallback": "show_source_only",
+        "provider_execution": False,
+        "batches": batches,
+    }
+
+
+def _translation_batch_row(
+    index: int,
+    rows: list[dict[str, Any]],
+    *,
+    oversized: bool = False,
+) -> dict[str, Any]:
+    return {
+        "batch_id": f"translation-batch-{index + 1:06d}",
+        "segment_ids": [str(row.get("segment_id") or "") for row in rows],
+        "source_chars": sum(len(str(row.get("source_text") or "")) for row in rows),
+        "status": (
+            "needs_manual_translation"
+            if oversized
+            else (
+                "ready"
+                if all(str(row.get("mandarin_text") or "").strip() for row in rows)
+                else "partial_or_missing"
+            )
+        ),
+    }
 
 
 def _load_supplemental_segment_metadata(root: Path, manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -534,7 +712,7 @@ def _validate_review_segments(
 ) -> list[dict[str, Any]]:
     source_order: dict[str, int] = {}
     source_speaker: dict[str, str] = {}
-    source_translation: dict[str, bool] = {}
+    source_translation: dict[str, str] = {}
     source_original_ids: dict[str, str] = {}
     for index, row in enumerate(originals):
         original_ids = [str(value) for value in row["source_segment_ids"]]
@@ -544,7 +722,7 @@ def _validate_review_segments(
         for lineage_id, source_id in zip(lineage_ids, original_ids, strict=True):
             source_order[lineage_id] = index
             source_speaker[lineage_id] = str(row.get("speaker_global_id") or "")
-            source_translation[lineage_id] = bool(str(row.get("mandarin_text") or "").strip())
+            source_translation[lineage_id] = str(row.get("mandarin_text") or "").strip()
             source_original_ids[lineage_id] = source_id
     normalized: list[dict[str, Any]] = []
     covered: set[str] = set()
@@ -588,6 +766,11 @@ def _validate_review_segments(
         if not source_text:
             raise ValueError(f"segments[{index}].source_text must not be empty")
         mandarin_text = str(raw.get("mandarin_text") or "").strip()
+        mandarin_loaded = raw.get("mandarin_loaded") is not False
+        if not mandarin_loaded:
+            if len(lineage_ids) != 1:
+                raise ValueError("unloaded translation cannot be split or merged")
+            mandarin_text = source_translation[lineage_ids[0]]
         for lineage_id in lineage_ids:
             split_counts[lineage_id] = split_counts.get(lineage_id, 0) + 1
             covered.add(lineage_id)
@@ -616,6 +799,85 @@ def _validate_review_segments(
             related = [row for row in normalized if source_id in row["source_lineage_ids"]]
             if any(not row["mandarin_text"] for row in related):
                 raise ValueError(f"split source {source_id} requires reviewed mandarin_text for every part")
+    return normalized
+
+
+def _validate_timestamp_notes(
+    value: Any,
+    reviewed_rows: list[dict[str, Any]],
+    originals: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Validate human timestamp notes against immutable source lineage.
+
+    Intent: adopt YouTube Digest's compact timestamp-note interaction while
+    preserving VKP evidence semantics. Decision: keep the verbatim source quote,
+    optional polished quote, human note and provenance as separate fields.
+    Reason: a polished quote is useful for study notes but must not overwrite or
+    impersonate ASR evidence. Evidence: YouTube Digest 1.1.5 note interaction in
+    ``sidepanel.js`` and ``background.js:1254-1300``. Effective scope: an
+    optional human-confirmed subtitle-review sidecar only.
+    """
+
+    if value in (None, []):
+        return []
+    if not isinstance(value, list):
+        raise ValueError("timestamp_notes must be an array when present")
+    if len(value) > 1000:
+        raise ValueError("timestamp_notes exceeds the 1000-note safety limit")
+    reviewed_by_id = {str(row.get("segment_id") or ""): row for row in reviewed_rows}
+    original_by_lineage = {
+        str(lineage_id): row
+        for row in originals
+        for lineage_id in (row.get("source_lineage_ids") or row.get("source_segment_ids") or [])
+    }
+    seen: set[str] = set()
+    normalized: list[dict[str, Any]] = []
+    for index, raw in enumerate(value):
+        if not isinstance(raw, dict):
+            raise ValueError(f"timestamp_notes[{index}] must be an object")
+        note_id = str(raw.get("note_id") or "").strip()
+        segment_id = str(raw.get("segment_id") or "").strip()
+        if not note_id or note_id in seen:
+            raise ValueError(f"timestamp_notes[{index}].note_id is missing or duplicate")
+        seen.add(note_id)
+        segment = reviewed_by_id.get(segment_id)
+        if segment is None:
+            raise ValueError(f"timestamp note references unknown segment_id: {segment_id}")
+        timestamp_ms = _strict_int(raw.get("timestamp_ms"), f"timestamp_notes[{index}].timestamp_ms")
+        if timestamp_ms < int(segment["start_ms"]) or timestamp_ms > int(segment["end_ms"]):
+            raise ValueError(f"timestamp note is outside segment bounds: {note_id}")
+        lineage_ids = [str(item) for item in segment.get("source_lineage_ids") or []]
+        source_rows = [original_by_lineage[item] for item in lineage_ids if item in original_by_lineage]
+        source_quote = " ".join(
+            str(row.get("source_text") or "").strip() for row in source_rows
+        ).strip()
+        original_quote = str(raw.get("original_quote") or "").strip()
+        if not original_quote or original_quote not in source_quote:
+            raise ValueError(f"timestamp note original_quote is not bound to source evidence: {note_id}")
+        polished_quote = str(raw.get("polished_quote") or "").strip()
+        note_text = str(raw.get("note_text") or "").strip()
+        if not polished_quote and not note_text:
+            raise ValueError(f"timestamp note must contain polished_quote or note_text: {note_id}")
+        normalized.append(
+            {
+                "note_id": note_id,
+                "segment_id": segment_id,
+                "source_segment_ids": list(segment.get("source_segment_ids") or []),
+                "source_lineage_ids": lineage_ids,
+                "timestamp_ms": timestamp_ms,
+                "original_quote": original_quote,
+                "polished_quote": polished_quote,
+                "note_text": note_text,
+                "evidence_ids": list(segment.get("evidence_ids") or []),
+                "status": "human_confirmed",
+                "provenance": {
+                    "source": "subtitle_editor_human_review",
+                    "original_quote_is_evidence": True,
+                    "polished_quote_is_derived": True,
+                    "note_text_is_human_authored": True,
+                },
+            }
+        )
     return normalized
 
 

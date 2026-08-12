@@ -1,6 +1,6 @@
 # Third-party notices
 
-Updated: 2026-08-10 18:14:34 +08:00 by Codex (GPT-5.6 Sol)
+Updated: 2026-08-12 09:19:10 +08:00 by Codex (GPT-5.6 Sol)
 
 VKP's own source is licensed under `AGPL-3.0-only`. That license does not replace the licenses of third-party packages, browser assets, independently installed tools, model weights, datasets, or hosted APIs.
 
@@ -41,6 +41,7 @@ The following are not vendored source trees. VKP either calls an independently m
 | OpenMOSS MOSS-Transcribe-Diarize | `eda4b9f13f1574765a80438c9797780a9bd48112` | Apache-2.0 | Optional CLI adapter; no runtime or weights bundled. |
 | SYSTRAN faster-whisper | `ed9a06cd89a93e47838f564998a6c09b655d7f43` | MIT | Optional local VAD/quality evidence; not a bundled model. |
 | OpenAI Whisper | `04f449b8a437f1bbd3dba5c9f826aca972e7709a` | MIT | Quality-heuristic reference/adaptation only. |
+| zarazhangrui/YouTube Digest | v1.1.5, `d03e1f61e017b032159ffd1821cac6e7693ce0c7` | MIT | Design reference for stable-ID bilingual transcript batching, viewport-lazy translation, timestamp notes, and time-coverage gates. No upstream browser-extension or Provider source is copied; Supadata, fixed DeepSeek, Key UI, and Chrome integration are excluded. |
 | Subtitle Edit | `1517bb5c23e1c4072ea829edbc8d08e27cf79289` | MIT | Silence-boundary chunking semantics adapted into VKP's existing manifest. |
 | UFAL SimulStreaming | `077ea37d5ab4ff98bc567e4507f140dc4e5d5ad6` | MIT (`LICENCE.txt`) | Longest-common-prefix agreement contract, candidate evidence only. |
 | UFAL whisper_streaming | `6da90b44b7e50d79695e68166d2a2c7609c75abb` | MIT | Timestamped overlap-evidence contract only. |

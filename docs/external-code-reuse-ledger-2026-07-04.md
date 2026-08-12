@@ -2023,3 +2023,15 @@ At the time recorded above, every untracked `src/video_knowledge_pipeline/*.py` 
 | Moyf/moys-asr-workflow `web/` editor | `v1.3.1` / `949bc84058cdae1d9c021c50203e6d2742f9392c` / AGPL-3.0-only | **complete browser shell vendored + VKP dual-track adapter implemented** | 意图：复用成熟播放器、字幕、波形、工作区、快捷键、边界、撤销、颜色、贴纸、静音区和导出 UI；决策：仅 vendoring 8 个 `web/` 根资源，模板增加两个明确 adapter slot，VKP 另加 source/mandarin 双轨、lineage、localStorage 草稿和 loopback 正式应用；真实分块 Bundle 继续复用 lecture review 已登记媒体解析，重复局部 ID 使用 editor-only occurrence lineage，重叠必须人工消解后才能 apply；理由：不重写已测试算法，也不让上游工程成为逐字稿真源或自动裁切 ASR；证据：上游 JS 92/92、七个未改静态文件 SHA 7/7 一致、VKP 新合同/HTTP 12/12、相关回归 31/31、两个真实 Bundle no-write 预检 15/469 段且明确报告 0/2 重叠；生效范围：Bundle 派生字幕审核与导出，原 ASR/翻译/Timeline 不变；回滚：删除新静态目录和入口，旧 `transcript-editor.html` 保持。详细记录：`docs/moys-asr-workflow-subtitle-editor-integration-2026-08-10.md`。 |
 
 明确拒绝：上游 launcher、Qwen/FunASR/Soniox、API Key 设置、桌面壳、服务器、第二套 FFmpeg/ASR 调度、任意绝对贴纸路径和媒体剪切执行。
+
+## 2026-08-12 YouTube Digest 选择性双语逐字稿与时间证据吸收
+
+更新时间：2026-08-12 09:19:10 +08:00 | Codex / GPT-5.6 Sol
+
+| 上游模块 | 固定版本 | 状态 | 意图 / 决策 / 理由 / 证据 / 生效范围 / 回滚 |
+| --- | --- | --- | --- |
+| zarazhangrui/youtube-digest | `v1.1.5` / `d03e1f61e017b032159ffd1821cac6e7693ce0c7` / MIT | **reviewed selected / stable-ID batching and lazy bilingual projection adapted / local trial implemented** | 意图：在 VKP 既有字幕审核页补充长逐字稿的稳定 ID 分批、视口懒加载、陈旧响应取消与原文/译文/双语模式；决策：复用 VKP occurrence lineage、translation sidecar、Loopback Review Server 和浏览器原生 `IntersectionObserver`/`AbortController`，不复制上游扩展或 Provider；理由：交互可吸收，但逐字稿真源、Key 与模型路由必须留在 VKP/统一网关；证据：上游源码复审固定 commit，VKP 新聚焦 5/5、关联 29/29、JS syntax 通过；生效范围：只读 translation slice 与字幕 UI，不生成翻译、不修改 canonical transcript；回滚：关闭 `lazy_translation` 或删除只读端点，静态页面继续完整内嵌既有译文。 |
+| YouTube Digest timestamp note interaction | 同上 | **interaction semantics adapted / provenance sidecar implemented** | 意图：允许按播放位置记录原始引文、润色引文和个人笔记；决策：三类内容分离，校验 segment/source lineage、时间边界与原文子串，正式应用只写 `human-reviewed-timestamp-notes.json`；理由：笔记不是 ASR 事实，不能反写原始证据；证据：正例 sidecar/receipt 与伪造引文 fail-closed 回归；生效范围：审核派生层；回滚：移除 note UI/sidecar，原字幕与逐字稿不受影响。 |
+| YouTube Digest chapters/quotes coverage pattern | 同上 | **quality-gate pattern adapted / implemented** | 意图：避免仅覆盖后半段或时间戳越界的章节/总结误报成熟；决策：章节包检查输入、范围、单调、首尾四分位，最终总结增加 range 与 first/last coverage 门；理由：系统时间事实必须由本地证据判定；证据：正常、tail-only、out-of-range 三类测试通过；生效范围：Smart Summary 本地质量报告；回滚：移除新增检查键即可恢复旧行为。 |
+
+明确拒绝：Supadata、固定 DeepSeek、上游整套浏览器扩展、Chrome 注入、Provider/Key 设置、PR #10 未固定实现、自动在线翻译与静默 local/cloud fallback。没有复制 YouTube Digest 源码；完整五字段记录见 `docs/youtube-digest-selective-adoption-2026-08-12.md`。

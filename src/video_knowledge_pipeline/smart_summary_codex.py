@@ -779,6 +779,22 @@ def smart_summary_quality_check(
     coverage_ratio = (max(summary_times) / transcript_max) if summary_times and transcript_max > 0 else 0.0
     checks.append(_check("time_coverage", coverage_ratio >= 0.85, f"summary_max={_fmt(max(summary_times) if summary_times else 0)}, transcript_max={_fmt(transcript_max)}, ratio={coverage_ratio:.2f}"))
 
+    timeline_anchor_quality = _summary_timeline_anchor_quality(summary_times, transcript_max)
+    checks.append(
+        _check(
+            "timestamp_range",
+            bool(timeline_anchor_quality["timestamp_range_passed"]),
+            str(timeline_anchor_quality["detail"]),
+        )
+    )
+    checks.append(
+        _check(
+            "first_last_timeline_coverage",
+            bool(timeline_anchor_quality["first_last_passed"]),
+            str(timeline_anchor_quality["detail"]),
+        )
+    )
+
     section_coverage = _section_coverage(text, transcript_max)
     checks.append(_check("balanced_sections", section_coverage["passed"], section_coverage["detail"]))
     visual_boundary = "视觉" in text and ("未执行" in text or "待复核" in text or "未可靠" in text)
@@ -2344,6 +2360,40 @@ def _section_coverage(text: str, transcript_max: float) -> dict[str, Any]:
         passed = passed and ok
         details.append(f"{heading}:{sorted(buckets)}")
     return {"passed": passed, "detail": "; ".join(details)}
+
+
+def _summary_timeline_anchor_quality(
+    times: list[float],
+    transcript_max: float,
+) -> dict[str, Any]:
+    """Validate summary timestamps against the transcript's first/last quarters.
+
+    This is the deterministic counterpart of YouTube Digest's prompt-only
+    chapter coverage rule. It does not infer missing timestamps or change the
+    summary; it only prevents out-of-range or tail-only timestamps from passing.
+    """
+
+    if transcript_max <= 0 or not times:
+        return {
+            "timestamp_range_passed": False,
+            "first_last_passed": False,
+            "detail": "missing transcript duration or summary timestamps",
+        }
+    tolerance = max(0.5, min(2.0, transcript_max * 0.002))
+    ordered = sorted(float(value) for value in times)
+    range_passed = all(0 <= value <= transcript_max + tolerance for value in ordered)
+    first_last_passed = (
+        ordered[0] <= transcript_max * 0.25 + tolerance
+        and ordered[-1] >= transcript_max * 0.75 - tolerance
+    )
+    return {
+        "timestamp_range_passed": range_passed,
+        "first_last_passed": first_last_passed,
+        "detail": (
+            f"first={ordered[0]:.3f}; last={ordered[-1]:.3f}; "
+            f"transcript_max={transcript_max:.3f}; tolerance={tolerance:.3f}"
+        ),
+    }
 
 
 def _check(key: str, passed: bool, detail: str) -> dict[str, Any]:

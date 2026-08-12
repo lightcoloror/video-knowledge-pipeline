@@ -75,6 +75,7 @@ def render_subtitle_editor_page(
     *,
     projection: dict[str, Any] | None = None,
     csrf_token: str = "",
+    lazy_translation: bool = False,
 ) -> str:
     root = Path(bundle_dir).expanduser().resolve()
     projection = projection or build_subtitle_editor_projection(root, write=False)
@@ -87,6 +88,7 @@ def render_subtitle_editor_page(
         f'src="/media" style="width:100%;display:block;"></{media_tag}>'
     )
     stickers = _approved_stickers(root)
+    client_projection = _client_projection(projection, lazy_translation=lazy_translation)
     server_config = {
         "saveUrl": None,
         "canSave": False,
@@ -99,8 +101,10 @@ def render_subtitle_editor_page(
             "csrfToken": csrf_token,
             "validateUrl": "/api/subtitle-editor/validate",
             "applyUrl": "/api/subtitle-editor/apply",
+            "translationUrl": "/api/subtitle-editor/translations",
+            "lazyTranslation": bool(lazy_translation),
             "approvedStickerOnly": True,
-            "projection": projection,
+            "projection": client_projection,
         },
     }
     replacements = {
@@ -114,7 +118,9 @@ def render_subtitle_editor_page(
         "__VKP_ADAPTER_JS__": _asset("vkp-adapter.js").rstrip(),
         "__TITLE__": html.escape(f"VKP 字幕编辑器 · {projection['title']}"),
         "__MEDIA_HTML__": media_html,
-        "__DATA_JSON__": _script_json(_upstream_project(projection)),
+        "__DATA_JSON__": _script_json(
+            _upstream_project(projection, lazy_translation=lazy_translation)
+        ),
         "__FILENAME_BASE_JSON__": _script_json(_safe_filename(projection["title"])),
         "__STICKERS_JSON__": _script_json(stickers),
         "__STICKER_ROOT_JSON__": '""',
@@ -137,7 +143,11 @@ def render_subtitle_editor_page(
     return page
 
 
-def _upstream_project(projection: dict[str, Any]) -> dict[str, Any]:
+def _upstream_project(
+    projection: dict[str, Any],
+    *,
+    lazy_translation: bool = False,
+) -> dict[str, Any]:
     segments: list[dict[str, Any]] = []
     for row in projection["segments"]:
         color = _speaker_color(str(row.get("speaker_global_id") or ""), row["start_ms"], row["end_ms"])
@@ -159,7 +169,9 @@ def _upstream_project(projection: dict[str, Any]) -> dict[str, Any]:
                 "start": row["start_ms"],
                 "end": row["end_ms"],
                 "text": row["source_text"],
-                "mandarin_text": row["mandarin_text"],
+                "mandarin_text": "" if lazy_translation else row["mandarin_text"],
+                "mandarin_loaded": not lazy_translation or not bool(row["mandarin_text"]),
+                "translation_available": bool(row["mandarin_text"]),
                 "segment_id": row["segment_id"],
                 "source_segment_ids": row["source_segment_ids"],
                 "source_lineage_ids": row["source_lineage_ids"],
@@ -186,6 +198,27 @@ def _upstream_project(projection: dict[str, Any]) -> dict[str, Any]:
             "translation_status": projection["tracks"]["mandarin"]["status"],
         },
     }
+
+
+def _client_projection(
+    projection: dict[str, Any],
+    *,
+    lazy_translation: bool,
+) -> dict[str, Any]:
+    if not lazy_translation:
+        return projection
+    # Intent: lazy-load derived translations without changing the projection
+    # identity. Decision: strip only mandarin_text from the inline client copy;
+    # the exact sidecar remains available through the bounded loopback slice.
+    # Reason: long bilingual transcripts should not inflate initial page load.
+    # Evidence: YouTube Digest 1.1.5 IntersectionObserver/generation pattern.
+    # Effective scope: Review Server HTML serialization only.
+    value = json.loads(json.dumps(projection, ensure_ascii=False))
+    for row in value.get("segments") or []:
+        if isinstance(row, dict):
+            row["translation_available"] = bool(row.get("mandarin_text"))
+            row["mandarin_text"] = ""
+    return value
 
 
 def _speaker_color(speaker_id: str, start_ms: int, end_ms: int) -> dict[str, Any] | None:
