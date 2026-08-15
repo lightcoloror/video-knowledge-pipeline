@@ -82,13 +82,14 @@ python -m video_knowledge_pipeline.quick_health
 
 - manifest/Schema/版本/哈希漂移：doctor 返回 `not_ready`，修复相应文件或重新安装同一版本；不自动覆盖。
 - smoke 产物缺失或哈希漂移：`validate-smoke` 失败。删除该合成 smoke 目录后可重建；不会影响业务 Bundle。
+- Git checkout 行尾漂移：所有 lock-bound 文本由仓库 `.gitattributes` 固定为 LF；不要通过忽略或规范化哈希绕过真实 byte drift。
 - 可选 Gateway 缺失：默认保留 `blocked_optional_dependency`；只有显式 `--require-gateway-mock` 才阻断。
 - portable contract bundle 缺失：metadata discovery 可继续；显式要求 contract import 时 fail-closed。
 - pytest Windows ACL：定向测试使用项目旁唯一目录并严格清理，不降低断言或静默跳过。
 
 ## 变更的意图 / 决策 / 理由 / 证据 / 生效范围
 
-完整记录见根目录 `CHANGE-RATIONALE.md` 的 `CR-20260815-01` 至 `CR-20260815-04`。本次生效范围只包含公开克隆发现、合成 smoke、薄编排、Schema 和测试；不修改真实 Bundle、Timeline、ASR、Provider gateway、consent、MCP、代理、Docker 或计划任务。
+完整记录见根目录 `CHANGE-RATIONALE.md` 的 `CR-20260815-01` 至 `CR-20260815-05`。本次生效范围只包含公开克隆发现、合成 smoke、薄编排、Schema 和测试；不修改真实 Bundle、Timeline、ASR、Provider gateway、consent、MCP、代理、Docker 或计划任务。
 
 ## 回滚
 

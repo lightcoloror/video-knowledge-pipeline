@@ -133,3 +133,12 @@
 - 证据：原始错误为 pytest session cleanup `WinError 5`；改造后 18/18 在普通权限下 4.04 秒通过。
 - 生效范围：`test_portable.py` 和 `test_quick_health.py` 的合成副本/漂移测试。
 - 回滚：当 Windows pytest 临时目录 ACL 稳定后可恢复 `tmp_path`；断言和生产代码无需变化。
+
+### CR-20260815-05 — Cross-platform byte-stable lock artifacts
+
+- 意图：保证 Windows `core.autocrlf`、Linux 和 CI checkout 得到相同的 lock-bound 文件字节。
+- 决策：对每个 `portable-contract.lock.v1` artifact 设置精确 `text eol=lf`，并将 `.gitattributes` 自身纳入锁和回归。
+- 理由：首次 Windows clean clone 将 LF 转成 CRLF，doctor 因真实 SHA 漂移正确 fail-closed；放宽哈希会掩盖供应链漂移。
+- 证据：原工作树 manifest SHA `345504...`，首次 clean clone SHA `072568...`；增加 checkout policy 后要求 clean clone doctor 恢复 ready。
+- 生效范围：11 个 portable lock-bound 文本文件的 Git checkout 字节；不修改运行时业务数据或用户全局 Git 配置。
+- 回滚：只能以等价的规范化 checkout/内容寻址机制替代；不能单独移除而保留 byte-level lock。

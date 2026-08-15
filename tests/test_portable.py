@@ -208,9 +208,18 @@ def test_taskfile_and_ci_keep_offline_execution_explicit() -> None:
     assert "require-gateway-mock" not in workflow
 
 
+def test_lock_bound_files_have_cross_platform_lf_checkout_policy() -> None:
+    attributes = set((ROOT / ".gitattributes").read_text(encoding="utf-8").splitlines())
+    lock = _read_json(ROOT / "portable-contract.lock.json")
+
+    for row in lock["artifacts"]:
+        assert f"{row['path']} text eol=lf" in attributes
+
+
 def _copy_portable_project(tmp_path: Path) -> Path:
     destination = tmp_path / "project"
     paths = [
+        ".gitattributes",
         "AGENT_DISCOVERY.md",
         "Taskfile.yml",
         "agent-tool-manifest.v1.json",

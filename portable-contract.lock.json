@@ -21,6 +21,7 @@
     "runtime_policy": "bootstrap may resolve semantic core dependencies; doctor and smoke use --offline --no-sync thereafter"
   },
   "artifacts": [
+    {"path": ".gitattributes", "sha256": "a7260db0541a7bf6a6348eb2e8f554e030602a9e39ac656588a9c0e3d62aa96f"},
     {"path": "agent-tool-manifest.v1.json", "sha256": "34550487404ffb5378e6303ca7702528781f0dc922fa560f5a2850f7077f687d"},
     {"path": "Taskfile.yml", "sha256": "eef7aab459e613d227e772235605404b6c38485119c8a4f59dac7301ff3bb5e6"},
     {"path": "portability/pyproject.toml", "sha256": "23fe7b08d938e69d0c3dff813f57a15d5dbe1cfaecf7966025ed027dcdf0249a"},
