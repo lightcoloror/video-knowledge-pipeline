@@ -12,7 +12,7 @@ VKP 现在能够把一次录音中各 ASR 分块的临时 CAM++ 聚类映射成�
 
 ## 固定上游与实测证据
 
-- 固定源码：`D:\used-by-codex\source-reviews\FunASR-1.3.30-16cd165`
+- 固定源码：`<workspace>\source-reviews\FunASR-1.3.30-16cd165`
 - 上游版本：FunASR `1.3.30`
 - 固定 commit：`16cd165ac3946cc8c08bf845331f91fefec8e1a9`
 - 直接参考入口：`funasr.bin.realtime_ws.HybridSpeakerTracker._map_cluster_centers`

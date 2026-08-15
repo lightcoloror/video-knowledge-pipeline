@@ -32,6 +32,7 @@ from .trusted_model_connector import execute_consented_model_task
 SCHEMA = "video_knowledge_pipeline.smart_summary_global_reduce.v1"
 CHAPTER_FACT_PACK_SCHEMA = "video_knowledge_pipeline.smart_summary_chapter_fact_pack.v1"
 DEFAULT_REDUCE_SECTION_MARKDOWN_CHARS = 1200
+MIN_REDUCE_SECTION_MARKDOWN_CHARS = 64
 DEFAULT_REDUCE_FACTS_PER_TYPE = 2
 DEFAULT_REDUCE_FACTS_PER_SECTION = 8
 DEFAULT_REDUCE_QUOTE_REFS_PER_SECTION = 2
@@ -760,12 +761,18 @@ def _reduce_prompt_plan(
 
     empty_rows = [{**row, "final_markdown": ""} for row in rows]
     fixed_chars = len(_render_reduce_prompt(root, empty_rows, course_map, fact_pack=pack))
-    per_section_budget = max(80, (limit - fixed_chars) // max(1, len(rows)))
+    per_section_budget = max(
+        MIN_REDUCE_SECTION_MARKDOWN_CHARS,
+        (limit - fixed_chars) // max(1, len(rows)),
+    )
     clipped_rows, clipped_ids = _balanced_rows(rows, per_section_budget=per_section_budget)
     prompt = _render_reduce_prompt(root, clipped_rows, course_map, fact_pack=pack)
-    while len(prompt) > limit and per_section_budget > 80:
+    while len(prompt) > limit and per_section_budget > MIN_REDUCE_SECTION_MARKDOWN_CHARS:
         overflow_per_section = (len(prompt) - limit + len(rows) - 1) // max(1, len(rows))
-        per_section_budget = max(80, per_section_budget - max(20, overflow_per_section))
+        per_section_budget = max(
+            MIN_REDUCE_SECTION_MARKDOWN_CHARS,
+            per_section_budget - max(20, overflow_per_section),
+        )
         clipped_rows, clipped_ids = _balanced_rows(rows, per_section_budget=per_section_budget)
         prompt = _render_reduce_prompt(root, clipped_rows, course_map, fact_pack=pack)
     return {
@@ -848,7 +855,7 @@ def _balanced_rows(rows: list[dict[str, Any]], *, per_section_budget: int) -> tu
 
 def _balanced_excerpt(text: str, *, max_chars: int) -> str:
     value = str(text or "")
-    limit = max(80, int(max_chars))
+    limit = max(MIN_REDUCE_SECTION_MARKDOWN_CHARS, int(max_chars))
     if len(value) <= limit:
         return value
     marker = "\n\n[本章中段已按上下文预算压缩；头尾均保留]\n\n"

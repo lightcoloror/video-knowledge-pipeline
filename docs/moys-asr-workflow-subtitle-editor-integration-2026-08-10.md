@@ -115,7 +115,7 @@ VKP 以 `Moyf/moys-asr-workflow` v1.3.1、commit
 - Workbench、旧编辑器、Review Server、翻译、新鲜度及 Chrome Playwright 关联回归：`31 passed / 0 failed`。
 - 本地 Chrome Playwright（合成 Bundle）：`2 passed / 0 failed`；未配置浏览器的公开克隆行为为 `2 skipped`，不下载浏览器。
 - Ruff（本轮 Python/测试）和 JavaScript/Python 语法检查：通过。
-- 完整离线 pytest：`1650 passed / 2 failed / 6 skipped`。两项失败可单独稳定复现，且对应文件均不在本轮 diff：既有 Global Reduce 在 3000 字预算测试中输出 3006 字；既有说话人文档含 `D:\used-by-codex` 绝对路径，触发公开快照门。本轮不夹带无关修复。
+- 完整离线 pytest：`1650 passed / 2 failed / 6 skipped`。两项失败可单独稳定复现，且对应文件均不在本轮 diff：既有 Global Reduce 在 3000 字预算测试中输出 3006 字；既有说话人文档含 `<workspace>` 展开后的本机绝对路径，触发公开快照门。本轮不夹带无关修复。
 - 全局源码账本：`error_count=0`；另有 100 条既存 warning，未由本轮新增。
 - 两个真实采访 Bundle 只读预检：`15 segments / ready / 0 overlap` 与 `469 segments / needs_review / 2 overlaps`；`write=false`，没有改真实产物。
 
