@@ -1,0 +1,181 @@
+{
+  "schema": "video_knowledge_pipeline.portability_completion_receipt.v1",
+  "dispatch_id": "PORTABILITY-VKP-CROSSPLATFORM-RECOVERY-20260816-01",
+  "original_dispatch_id": "PORTABILITY-VKP-CROSSPLATFORM-20260815-01",
+  "work_id": "WL-20260816-000721-bdb2c2",
+  "generated_at": "2026-08-16 00:30:51",
+  "acting_tool_model": "Codex (GPT-5.6 Sol)",
+  "goal_status": "completed_with_documented_platform_gaps",
+  "status": "completed",
+  "repository": {
+    "base_commit": "d937163b702fa8a24c2e84a4e420a3870222a342",
+    "implementation_commits": [
+      "783b77c5a6247d1543731cdcf3783d20935add6b",
+      "951b6dbcca42765f75da7af7ede7e94d741cf1d9",
+      "7cef139cc0659933f6e8bb2a3d4683982a453a66"
+    ],
+    "base_is_ancestor": true,
+    "push_performed": false
+  },
+  "completed_scope": [
+    "portable Python CLI with doctor, synthetic smoke, and smoke validation",
+    "repository agent-tool manifest, JSON Schemas, byte-stable lock, and LF checkout policy",
+    "cross-platform uv project metadata, Taskfile entrypoints, and Windows/Linux CI contract",
+    "path-neutral quick health that does not import ASR, model, CUDA, or provider runtimes",
+    "synthetic material-manifest bridge smoke with no execution authority",
+    "fail-closed checks for missing or drifting contracts, manifest hashes, corrupt state, and incompatible optional Gateway mock",
+    "explicit external portable contract injection with clean-clone skip when absent and exact SHA validation when present",
+    "Chinese operation, provenance, rollback, and capability-boundary documentation"
+  ],
+  "modified_files": [
+    ".gitattributes",
+    ".github/workflows/portable.yml",
+    "AGENT_DISCOVERY.md",
+    "CHANGE-RATIONALE.md",
+    "README.md",
+    "THIRD_PARTY_NOTICES.md",
+    "Taskfile.yml",
+    "agent-tool-manifest.v1.json",
+    "docs/portable-cross-platform-2026-08-15.md",
+    "portability/pyproject.toml",
+    "portable-contract.lock.json",
+    "pyproject.toml",
+    "src/video_knowledge_pipeline/fixtures/portable/synthetic-video-bundle.v1.json",
+    "src/video_knowledge_pipeline/portable.py",
+    "src/video_knowledge_pipeline/quick_health.py",
+    "src/video_knowledge_pipeline/schemas/agent-tool-manifest.v1.schema.json",
+    "src/video_knowledge_pipeline/schemas/portable-doctor.v1.schema.json",
+    "src/video_knowledge_pipeline/schemas/portable-smoke-receipt.v1.schema.json",
+    "src/video_knowledge_pipeline/schemas/quick-health.v1.schema.json",
+    "tests/portable_test_runtime.py",
+    "tests/test_portable.py",
+    "tests/test_quick_health.py",
+    "docs/PORTABILITY-VKP-CROSSPLATFORM-RECOVERY-20260816-01.completion-receipt.json"
+  ],
+  "artifacts": {
+    "agent_tool_manifest": {
+      "path": "agent-tool-manifest.v1.json",
+      "sha256": "34550487404ffb5378e6303ca7702528781f0dc922fa560f5a2850f7077f687d",
+      "bytes": 6796
+    },
+    "portable_lock": {
+      "path": "portable-contract.lock.json",
+      "sha256": "f014b5083d199a9ee1fa95eccf80c80e9d008eebafca76ef04735e9791b40007",
+      "bytes": 2822
+    },
+    "external_contract_bundle": {
+      "discovery": "explicit VKP_PORTABLE_CONTRACT_BUNDLE or --contract-bundle",
+      "sha256": "e7315a36f66687ab1f807dfc908ed21932d5eee543bbb2775b74d2c50ca4d0b0",
+      "required_by_default": false
+    },
+    "smoke": {
+      "receipt_sha256": "6adba7d947478f94eaa8203ac2941246fa753002e8c1b6654ce74944d0441a66",
+      "receipt_file_sha256_run_1": "a9c8c7258192dbdb7cc2539ee0dff67cfc750ac5fc743960e7005863f6c51310",
+      "receipt_file_sha256_run_2": "a9c8c7258192dbdb7cc2539ee0dff67cfc750ac5fc743960e7005863f6c51310",
+      "artifact_count": 4,
+      "idempotent": true,
+      "validation_status": "valid"
+    },
+    "wheel": {
+      "name": "video_knowledge_pipeline-0.1.0-py3-none-any.whl",
+      "required_portable_members_missing": [],
+      "build_backend": "setuptools.build_meta",
+      "standard_pep517_wrapper_status": "blocked_by_host_temp_acl",
+      "direct_backend_status": "passed"
+    }
+  },
+  "verification": {
+    "focused_without_external_bundle": {
+      "passed": 12,
+      "skipped": 1,
+      "failed": 0,
+      "meaning": "clean clone does not guess a workspace sibling"
+    },
+    "focused_with_exact_external_bundle": {
+      "passed": 13,
+      "skipped": 0,
+      "failed": 0
+    },
+    "associated_clean_clone": {
+      "passed": 52,
+      "skipped": 0,
+      "failed": 0
+    },
+    "full_clean_clone": {
+      "passed": 1707,
+      "skipped": 9,
+      "failed": 5,
+      "errors": 2,
+      "duration_seconds": 255.02,
+      "portable_regressions": 0,
+      "nonpassing_classification": [
+        "four Qwen ASR resilience tests use tempfile.TemporaryDirectory and encounter the host Windows temp ACL defect",
+        "one atomic reservation test writes through the host-global tempfile root and encounters the same ACL defect",
+        "one MCP resolver teardown retains a directory handle on Windows",
+        "one video-RAG teardown retains an SQLite file handle on Windows"
+      ]
+    },
+    "quick_health_ms": [76.32, 65.08, 72.97, 70.88, 76.3],
+    "quick_health_budget_ms": 10000,
+    "ruff": "passed_no_cache",
+    "git_diff_check": "passed_in_clean_clone",
+    "publication_safety": "passed_as_part_of_associated_suite",
+    "secret_scan": "no_secret_candidate_in_portability_changes",
+    "personal_absolute_path_scan": "no_personal_absolute_path_in_portability_changes"
+  },
+  "platform_matrix": {
+    "windows": {
+      "contract": "verified",
+      "doctor": "ready",
+      "smoke": "verified_current_host",
+      "clean_clone": "verified"
+    },
+    "linux": {
+      "contract": "verified",
+      "doctor_target": "ready",
+      "runtime_evidence": "static_contract_and_ci_matrix_only",
+      "real_runner_executed": false
+    },
+    "macos": {
+      "contract": "declared",
+      "runtime_evidence": "not_run"
+    }
+  },
+  "capability_truth": {
+    "portable_metadata_discovery": "ready",
+    "synthetic_material_manifest": "ready",
+    "quick_health": "ready",
+    "local_asr_models": "not_promoted_by_portability",
+    "formal_cantonese_asr": "not_promoted_by_portability",
+    "real_local_embedding_model": "not_promoted_by_portability",
+    "speaker_identity": "not_promoted_by_portability",
+    "online_provider_execution": "requires_existing_profile_route_consent_and_separate_user_authorization",
+    "metadata_authorizes_execution": false
+  },
+  "remaining_scope": [
+    "run the existing CI matrix on a real Linux runner",
+    "verify macOS package and smoke behavior on a real host",
+    "prepare a complete uv offline cache before generating a reproducible uv.lock; current cache lacks jieba",
+    "repair or isolate the host Windows tempfile ACL and two teardown handle leaks before claiming an entirely green full suite"
+  ],
+  "change_rationale": {
+    "intent": "make a public clean clone discover and safely exercise VKP offline candidate capabilities",
+    "decision": "reuse existing VKP CLI, manifest, creative contract bridge, Gateway semantics, uv, and Taskfile through a thin portable front door",
+    "reason": "avoid PowerShell-only discovery, workspace-relative coupling, duplicate execution state, and false readiness claims",
+    "evidence": "three selective implementation commits, clean-clone doctor and smoke, exact bundle SHA verification, focused and associated regressions, wheel member inspection, and a full clean-clone classification run",
+    "effective_scope": "offline synthetic metadata discovery and candidate smoke only; no production media or provider execution authority",
+    "rollback": "revert the three implementation commits in reverse order; existing video-knowledge.ps1 and native VKP workflows remain independent"
+  },
+  "boundary_check": {
+    "network_used": false,
+    "provider_called": false,
+    "key_read": false,
+    "media_read_or_uploaded": false,
+    "service_started": false,
+    "registry_modified": false,
+    "mcp_proxy_docker_modified": false,
+    "business_or_knowledge_system_written": false,
+    "push_performed": false,
+    "concurrent_provider_or_dashscope_changes_included": false
+  }
+}
