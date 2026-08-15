@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -14,15 +15,8 @@ from portable_test_runtime import portable_test_directory
 
 
 ROOT = Path(__file__).resolve().parents[1]
-CONTRACT_BUNDLE = (
-    ROOT.parent
-    / "public-repos"
-    / "research-content-production"
-    / "contracts"
-    / "portable"
-    / "v1"
-    / "portable-contract-bundle.v1.json"
-)
+_CONTRACT_BUNDLE_ENV = os.environ.get("VKP_PORTABLE_CONTRACT_BUNDLE", "").strip()
+CONTRACT_BUNDLE = Path(_CONTRACT_BUNDLE_ENV) if _CONTRACT_BUNDLE_ENV else None
 
 
 def test_portable_doctor_is_schema_valid_idempotent_and_path_neutral() -> None:
@@ -65,7 +59,12 @@ def test_portable_doctor_distinguishes_windows_linux_and_macos_evidence() -> Non
                 }
 
 
+@pytest.mark.skipif(
+    CONTRACT_BUNDLE is None,
+    reason="set VKP_PORTABLE_CONTRACT_BUNDLE to verify the external distribution bundle",
+)
 def test_portable_doctor_verifies_exact_shared_contract_bundle() -> None:
+    assert CONTRACT_BUNDLE is not None
     result = portable.portable_doctor(
         ROOT,
         contract_bundle=CONTRACT_BUNDLE,

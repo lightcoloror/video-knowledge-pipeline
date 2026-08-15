@@ -142,3 +142,12 @@
 - 证据：原工作树 manifest SHA `345504...`，首次 clean clone SHA `072568...`；增加 checkout policy 后要求 clean clone doctor 恢复 ready。
 - 生效范围：11 个 portable lock-bound 文本文件的 Git checkout 字节；不修改运行时业务数据或用户全局 Git 配置。
 - 回滚：只能以等价的规范化 checkout/内容寻址机制替代；不能单独移除而保留 byte-level lock。
+
+### CR-20260815-06 — Explicit external contract bundle discovery
+
+- 意图：让 clean clone 不依赖开发者机器上的 `public-repos` sibling 目录。
+- 决策：生产 doctor 继续只接受显式 `--contract-bundle`；测试通过 `VKP_PORTABLE_CONTRACT_BUNDLE` 注入精确外部快照，未配置时明确 skip。
+- 理由：外部 portable contract 是可选分发依赖，不应从目录布局猜测；缺少它不能表现为 import error 或偶然本机成功。
+- 证据：第二次 clean clone 的仓内 doctor/smoke 已通过，唯一失败是旧测试的 sibling path；显式传入现有快照可校验固定 SHA。
+- 生效范围：外部合同的测试发现方式；仓内 manifest、Schema、smoke 和运行授权语义不变。
+- 回滚：可改用包资源或用户选择的下载缓存，但不得恢复固定工作区绝对/相邻路径。

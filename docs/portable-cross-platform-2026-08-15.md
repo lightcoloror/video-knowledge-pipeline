@@ -40,6 +40,8 @@ python -m video_knowledge_pipeline.portable doctor
 python -m video_knowledge_pipeline.quick_health
 ```
 
+要在本机额外验证外部分发合同包，可设置 `VKP_PORTABLE_CONTRACT_BUNDLE`，或直接向 doctor 传入 `--contract-bundle <file> --require-contract-bundle`。默认不猜测工作区 sibling 路径；缺少外部合同包只影响显式 contract import，不影响仓内 metadata discovery。
+
 `Taskfile.yml` 只是上述命令的薄编排层；没有远程 include，也不使用不安全模式。
 
 ## 兼容性与来源
