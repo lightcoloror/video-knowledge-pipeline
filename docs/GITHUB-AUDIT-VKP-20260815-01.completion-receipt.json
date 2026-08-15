@@ -1,0 +1,137 @@
+{
+  "schema": "codex_dispatch_receipt.v1",
+  "dispatch_id": "GITHUB-AUDIT-VKP-20260815-01",
+  "work_id": "WL-20260815-163326-723a7b",
+  "goal_status": "complete",
+  "completed_at": "2026-08-15 21:58:07 +08:00",
+  "actor": "Codex (GPT-5.6 Sol)",
+  "repository": {
+    "path": "video-knowledge-pipeline",
+    "url": "https://github.com/lightcoloror/video-knowledge-pipeline",
+    "branch": "master",
+    "visibility": "PUBLIC",
+    "license": "AGPL-3.0",
+    "baseline_sha": "2518b118cd9c945535428807af6d1de1f570bbc8",
+    "remote_code_and_audit_sha": "cecc2bf977d54fd9af876822d1def8e462c02fab",
+    "completion_receipt_commit": "self"
+  },
+  "commits": [
+    {
+      "sha": "0b4cf1a8fd24dac2febe53b3da45392ddc52ee18",
+      "subject": "fix: preserve long-media ASR evidence integrity"
+    },
+    {
+      "sha": "cd62ceaacdd693c46be2fb2478ce6cc7be80a10b",
+      "subject": "feat: add candidate-only Cantonese speaker analysis"
+    },
+    {
+      "sha": "c169f437f5c4c66831ffc443c9ce1a22c94e59b8",
+      "subject": "feat: add bounded quick health probe"
+    },
+    {
+      "sha": "77978eef62eb9ff1f71e24cfbf20757172da1c25",
+      "subject": "feat: add local embedding gateway candidate"
+    },
+    {
+      "sha": "0f4dffca1174e97968fb59120de5af6ee567d2d5",
+      "subject": "test: align reusable hash and Qwen fixtures"
+    },
+    {
+      "sha": "cecc2bf977d54fd9af876822d1def8e462c02fab",
+      "subject": "docs: record VKP publication audit"
+    }
+  ],
+  "modified_files": [
+    "AGENT_DISCOVERY.md",
+    "THIRD_PARTY_NOTICES.md",
+    "docs/VKP-QUICK-HEALTH-BUDGET-20260812-01-receipt.json",
+    "docs/VKP-QUICK-HEALTH-BUDGET-20260812-01.md",
+    "docs/cantonese-detail-v1-and-shared-speaker-2026-08-11.md",
+    "docs/embedding-gateway-adapter-2026-08-15.md",
+    "docs/external-code-reuse-ledger-2026-07-04.md",
+    "docs/github-audit-vkp-20260815.md",
+    "docs/video-knowledge-pipeline-quick-health-registry-proposal-20260812.json",
+    "pyproject.toml",
+    "scripts/video-knowledge.ps1",
+    "src/video_knowledge_pipeline/asr_adapter.py",
+    "src/video_knowledge_pipeline/asr_runner.py",
+    "src/video_knowledge_pipeline/campplus_embedding_runner.py",
+    "src/video_knowledge_pipeline/campplus_oracle_cluster_runner.py",
+    "src/video_knowledge_pipeline/campplus_speaker_center_sidecar.py",
+    "src/video_knowledge_pipeline/cli.py",
+    "src/video_knowledge_pipeline/embedding_gateway_adapter.py",
+    "src/video_knowledge_pipeline/quality_benchmark.py",
+    "src/video_knowledge_pipeline/quality_benchmark_variants.py",
+    "src/video_knowledge_pipeline/quick_health.py",
+    "src/video_knowledge_pipeline/qwen3_asr_python_runner.py",
+    "src/video_knowledge_pipeline/schemas/quick-health.v1.schema.json",
+    "src/video_knowledge_pipeline/speaker_global_alignment.py",
+    "src/video_knowledge_pipeline/speaker_shared_session_alignment.py",
+    "src/video_knowledge_pipeline/transcript_source_completeness.py",
+    "src/video_knowledge_pipeline/video.py",
+    "tests/test_asr_adapter_chunk_identity.py",
+    "tests/test_embedding_gateway_adapter.py",
+    "tests/test_frame_sampling_strategy.py",
+    "tests/test_local_media_resilience.py",
+    "tests/test_phase17_quality_reset.py",
+    "tests/test_quality_benchmark_variants.py",
+    "tests/test_quick_health.py",
+    "tests/test_qwen3_asr_adapter.py",
+    "tests/test_speaker_global_alignment.py",
+    "tests/test_transcript_source_completeness.py"
+  ],
+  "verification": {
+    "clean_clone_full_pytest": "1698 passed, 10 skipped, 0 failed in 281.72s",
+    "clean_clone_receipt_sha256": "d415b37cfe3f05ed32edfa51c7d9f5c932a78a6df85150c8f8e125f5d9606a51",
+    "asr_speaker_focused": "125 passed",
+    "embedding_quick_focused": "15 passed, 1 skipped",
+    "audit_regression_fixes": "19 passed, 1 skipped",
+    "ruff_changed_files": "25 Python files; all checks passed",
+    "ruff_new_file_format": "9 files already formatted",
+    "ruff_repository_baseline": "925 pre-existing findings; no new finding in changed files",
+    "wheel": "passed; 1937933 bytes; new modules and quick-health schema present; no DashScope/media/model/runtime output",
+    "publication_safety": "passed inside clean clone full suite",
+    "secret_shape_matches_in_added_lines": 0,
+    "personal_absolute_path_matches_in_added_lines": 0,
+    "source_inventory": "status=ok; error_count=0; 100 unrelated global warnings",
+    "git_diff_check": "passed",
+    "remote_readback": "GitHub REST returned cecc2bf977d54fd9af876822d1def8e462c02fab before publishing this self receipt"
+  },
+  "excluded_local_changes": [
+    "src/video_knowledge_pipeline/model_provider_catalog.py",
+    "src/video_knowledge_pipeline/model_provider_onboarding.py",
+    "src/video_knowledge_pipeline/online_model_gateway.py",
+    "tests/test_model_provider_catalog.py",
+    "tests/test_model_provider_onboarding.py",
+    "src/video_knowledge_pipeline/dashscope_filetrans_adapter.py",
+    "scripts/run-tests-managed.ps1",
+    "agent-tool-manifest.v1.json",
+    "tests/test_asr_pipeline.py status-only without content diff"
+  ],
+  "remaining_scope": [
+    "Qwen3-ASR 12-clip benchmark still has no human listening truth; model_switch_allowed remains false.",
+    "Anonymous three-speaker candidates still include low-purity assignments and may not be automatically named or treated as identity proof.",
+    "The real isolated embedding runtime/model smoke and Recall@5/10 benchmark remain pending.",
+    "Quick health does not prove ASR, GPU, model cache or Provider readiness.",
+    "Linux and macOS optional-model execution paths have not received real E2E validation."
+  ],
+  "change_rationale": {
+    "intent": "Publish only reproducible VKP ASR, anonymous-speaker, local-embedding and quick-health improvements while preserving evidence and privacy boundaries.",
+    "decision": "Split work into independent commits, reuse pinned Qwen3-ASR, FunASR and model-provider-gateway contracts, and exclude unfinished Provider/DashScope and machine-local files.",
+    "reason": "A single mixed commit would make provenance, rollback, publication safety and runtime truth impossible to audit.",
+    "evidence": "Clean-clone full tests, focused tests, changed-file Ruff/format, wheel inspection, publication safety, source-ledger validation and GitHub REST readback.",
+    "effective_scope": "Public VKP source, synthetic tests, schemas, attribution and operational documentation only.",
+    "rollback": "Revert the listed commits in reverse order; no production Bundle, model cache or private sidecar migration is required."
+  },
+  "boundary_check": {
+    "real_key_read": false,
+    "provider_called": false,
+    "media_uploaded": false,
+    "persistent_service_started": false,
+    "mcp_proxy_or_docker_modified": false,
+    "force_push_used": false,
+    "production_bundle_modified": false,
+    "model_or_runtime_artifact_committed": false,
+    "excluded_dirty_tree_preserved": true
+  }
+}
