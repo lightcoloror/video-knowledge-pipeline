@@ -12,6 +12,7 @@ from pathlib import Path
 import jsonschema
 
 from video_knowledge_pipeline.quick_health import SCHEMA, build_quick_health
+from portable_test_runtime import portable_test_directory
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -36,6 +37,7 @@ def test_quick_health_is_schema_valid_and_deterministic() -> None:
     assert isinstance(first["runtime"]["heavy_modules_loaded"], list)
     assert first["runtime"]["model_stack_evaluated"] is False
     assert first["callable"]["asr_capability_evaluated"] is False
+    assert first["callable"]["quick_command"] == "python -m video_knowledge_pipeline.quick_health"
     assert first["freshness"]["cached"] is False
     assert first["boundaries"] == {
         "starts_service": False,
@@ -46,8 +48,9 @@ def test_quick_health_is_schema_valid_and_deterministic() -> None:
     }
 
 
-def test_quick_health_fails_closed_for_missing_project(tmp_path: Path) -> None:
-    result = build_quick_health(tmp_path / "missing")
+def test_quick_health_fails_closed_for_missing_project() -> None:
+    with portable_test_directory("missing-project") as tmp_path:
+        result = build_quick_health(tmp_path / "missing")
 
     assert result["ok"] is False
     assert result["status"] == "not_ready"
@@ -55,48 +58,51 @@ def test_quick_health_fails_closed_for_missing_project(tmp_path: Path) -> None:
     assert "required_path:config" in result["failed_checks"]
 
 
-def test_quick_health_fails_closed_for_corrupt_config(tmp_path: Path) -> None:
-    root = _copy_minimal_project(tmp_path)
-    (root / "config" / "video-knowledge-pipeline.json").write_text(
-        "{", encoding="utf-8"
-    )
+def test_quick_health_fails_closed_for_corrupt_config() -> None:
+    with portable_test_directory("corrupt-config") as tmp_path:
+        root = _copy_minimal_project(tmp_path)
+        (root / "config" / "video-knowledge-pipeline.json").write_text(
+            "{", encoding="utf-8"
+        )
 
-    result = build_quick_health(root)
+        result = build_quick_health(root)
 
     assert result["ok"] is False
     assert "config_schema" in result["failed_checks"]
 
 
-def test_quick_health_fails_closed_for_schema_version_drift(tmp_path: Path) -> None:
-    root = _copy_minimal_project(tmp_path)
-    schema_path = (
-        root
-        / "src"
-        / "video_knowledge_pipeline"
-        / "schemas"
-        / "quick-health.v1.schema.json"
-    )
-    schema = json.loads(schema_path.read_text(encoding="utf-8"))
-    schema["properties"]["schema_version"]["const"] = "2.0"
-    schema_path.write_text(json.dumps(schema), encoding="utf-8")
+def test_quick_health_fails_closed_for_schema_version_drift() -> None:
+    with portable_test_directory("schema-drift") as tmp_path:
+        root = _copy_minimal_project(tmp_path)
+        schema_path = (
+            root
+            / "src"
+            / "video_knowledge_pipeline"
+            / "schemas"
+            / "quick-health.v1.schema.json"
+        )
+        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+        schema["properties"]["schema_version"]["const"] = "2.0"
+        schema_path.write_text(json.dumps(schema), encoding="utf-8")
 
-    result = build_quick_health(root)
+        result = build_quick_health(root)
 
     assert result["ok"] is False
     assert "quick_health_schema" in result["failed_checks"]
 
 
-def test_quick_health_fails_closed_for_project_identity_drift(tmp_path: Path) -> None:
-    root = _copy_minimal_project(tmp_path)
-    pyproject_path = root / "pyproject.toml"
-    pyproject_path.write_text(
-        pyproject_path.read_text(encoding="utf-8").replace(
-            'name = "video-knowledge-pipeline"', 'name = "different-project"'
-        ),
-        encoding="utf-8",
-    )
+def test_quick_health_fails_closed_for_project_identity_drift() -> None:
+    with portable_test_directory("identity-drift") as tmp_path:
+        root = _copy_minimal_project(tmp_path)
+        pyproject_path = root / "pyproject.toml"
+        pyproject_path.write_text(
+            pyproject_path.read_text(encoding="utf-8").replace(
+                'name = "video-knowledge-pipeline"', 'name = "different-project"'
+            ),
+            encoding="utf-8",
+        )
 
-    result = build_quick_health(root)
+        result = build_quick_health(root)
 
     assert result["ok"] is False
     assert "project_identity" in result["failed_checks"]
@@ -139,11 +145,13 @@ def test_quick_health_cli_is_bounded_idempotent_and_read_only() -> None:
 def _copy_minimal_project(tmp_path: Path) -> Path:
     root = tmp_path / "project"
     paths = (
-        "scripts/video-knowledge.ps1",
         "src/video_knowledge_pipeline/cli.py",
         "src/video_knowledge_pipeline/__init__.py",
         "src/video_knowledge_pipeline/quick_health.py",
+        "src/video_knowledge_pipeline/portable.py",
         "src/video_knowledge_pipeline/schemas/quick-health.v1.schema.json",
+        "agent-tool-manifest.v1.json",
+        "portable-contract.lock.json",
         "config/video-knowledge-pipeline.json",
         "pyproject.toml",
     )
@@ -157,15 +165,17 @@ def _copy_minimal_project(tmp_path: Path) -> Path:
 
 def _required_hashes(root: Path) -> dict[str, str]:
     paths = (
-        root / "scripts" / "video-knowledge.ps1",
         root / "src" / "video_knowledge_pipeline" / "cli.py",
         root / "src" / "video_knowledge_pipeline" / "__init__.py",
         root / "src" / "video_knowledge_pipeline" / "quick_health.py",
+        root / "src" / "video_knowledge_pipeline" / "portable.py",
         root
         / "src"
         / "video_knowledge_pipeline"
         / "schemas"
         / "quick-health.v1.schema.json",
+        root / "agent-tool-manifest.v1.json",
+        root / "portable-contract.lock.json",
         root / "config" / "video-knowledge-pipeline.json",
         root / "pyproject.toml",
     )

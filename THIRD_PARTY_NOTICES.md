@@ -29,6 +29,8 @@ No model weights, customer media, production transcripts, or evaluation datasets
 | pyannote.metrics | `>=4.1,<5` optional evaluation extra | MIT | Speaker diarization evaluation only. |
 | MeetEval | commit `184ff17eb77fd6db4aba27a9e303a6a3edb09364` optional evaluation extra | MIT | Speaker-attributed transcript metrics only. |
 
+The portable developer workflow also uses independently installed tooling. `astral-sh/uv` (source-reviewed commit `f1a42680ff5272232d65748acf338b19778dde24`, Apache-2.0 OR MIT) provides the isolated Python environment/bootstrap contract. `go-task/task` (source-reviewed commit `1868ad29698bb336ba76f54bbd9d711c2fa08e8d`, MIT) interprets the local-only `Taskfile.yml`. Neither tool is vendored into the VKP wheel; the Taskfile contains no remote includes and the offline tasks do not use Task's insecure remote feature.
+
 The package manager installs these dependencies separately. Their own distributions contain the authoritative license text and transitive notices.
 
 ## Reviewed or adapted upstream designs
@@ -40,7 +42,7 @@ The following are not vendored source trees. VKP either calls an independently m
 | ModelScope FunASR | `516c4f770496a5cbb89c8e2e447211bbb7b0db71`; reviewed release `16cd165ac3946cc8c08bf845331f91fefec8e1a9` | MIT | Independently installed ASR/VAD/punctuation/speaker runtime; no weights bundled. |
 | OpenMOSS MOSS-Transcribe-Diarize | `eda4b9f13f1574765a80438c9797780a9bd48112` | Apache-2.0 | Optional CLI adapter; no runtime or weights bundled. |
 | Qwen3-ASR | `7c6daf77a2421100f5fb066495372c00129d39ff` | Apache-2.0 | Optional independently installed Cantonese/forced-alignment runtime; VKP reuses the public `language` and `context` interfaces. No source tree or weights are bundled. |
-| lightcoloror/model-provider-gateway | `6575c8089d5f28ae159a0c01cedfa3320db7d7b3` | AGPL-3.0-only | Optional shared profile/route/manifest/gate/receipt package for local embedding candidates and reviewed Provider capabilities. VKP does not bundle credentials, models, vectors, or provider data. |
+| lightcoloror/model-provider-gateway | public provenance baseline `6575c8089d5f28ae159a0c01cedfa3320db7d7b3`; runtime compatibility range `>=0.3,<0.4` | AGPL-3.0-only | Optional shared profile/route/manifest/gate/receipt package. Runtime admission uses adapter Schema, capabilities, consent and safety semantics rather than an unrelated exact repository HEAD. VKP does not bundle credentials, models, vectors, or provider data. |
 | SYSTRAN faster-whisper | `ed9a06cd89a93e47838f564998a6c09b655d7f43` | MIT | Optional local VAD/quality evidence; not a bundled model. |
 | OpenAI Whisper | `04f449b8a437f1bbd3dba5c9f826aca972e7709a` | MIT | Quality-heuristic reference/adaptation only. |
 | zarazhangrui/YouTube Digest | v1.1.5, `d03e1f61e017b032159ffd1821cac6e7693ce0c7` | MIT | Design reference for stable-ID bilingual transcript batching, viewport-lazy translation, timestamp notes, and time-coverage gates. No upstream browser-extension or Provider source is copied; Supadata, fixed DeepSeek, Key UI, and Chrome integration are excluded. |

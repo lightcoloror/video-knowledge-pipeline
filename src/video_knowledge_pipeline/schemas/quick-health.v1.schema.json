@@ -48,11 +48,12 @@
     "callable": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["status", "quick_command", "detailed_asr_command", "asr_capability_evaluated"],
+      "required": ["status", "quick_command", "detailed_asr_command", "windows_wrapper", "asr_capability_evaluated"],
       "properties": {
         "status": {"enum": ["callable", "not_callable"]},
         "quick_command": {"type": "string", "minLength": 1},
         "detailed_asr_command": {"type": "string", "minLength": 1},
+        "windows_wrapper": {"type": "string"},
         "asr_capability_evaluated": {"const": false}
       }
     },

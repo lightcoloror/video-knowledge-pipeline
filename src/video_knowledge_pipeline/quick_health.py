@@ -54,10 +54,12 @@ def build_quick_health(project_root: str | Path | None = None) -> dict[str, Any]
         )
 
     required_paths = {
-        "wrapper": root / "scripts" / "video-knowledge.ps1",
         "cli": root / "src" / "video_knowledge_pipeline" / "cli.py",
         "package": root / "src" / "video_knowledge_pipeline" / "__init__.py",
         "quick_health": root / "src" / "video_knowledge_pipeline" / "quick_health.py",
+        "portable": root / "src" / "video_knowledge_pipeline" / "portable.py",
+        "agent_manifest": root / "agent-tool-manifest.v1.json",
+        "portable_lock": root / "portable-contract.lock.json",
         "config": root / "config" / "video-knowledge-pipeline.json",
         "pyproject": root / "pyproject.toml",
         "schema": root
@@ -119,17 +121,19 @@ def build_quick_health(project_root: str | Path | None = None) -> dict[str, Any]
         f"quick-health schema must enforce {SCHEMA!r} at version {SCHEMA_VERSION!r}",
     )
 
-    wrapper_text = _read_text(required_paths["wrapper"])
     cli_text = _read_text(required_paths["cli"])
+    pyproject_text = _read_text(required_paths["pyproject"])
+    wrapper_path = root / "scripts" / "video-knowledge.ps1"
+    wrapper_text = _read_text(wrapper_path)
     check(
-        "wrapper_entrypoint",
-        "quick-health" in wrapper_text
-        and "video_knowledge_pipeline.quick_health" in wrapper_text,
-        "PowerShell wrapper must expose the lightweight quick-health dispatch",
+        "python_entrypoint",
+        "video-knowledge-quick-health" in pyproject_text
+        and "video-knowledge-portable" in pyproject_text,
+        "pyproject must expose cross-platform quick-health and portable commands",
     )
     check(
         "detailed_diagnostic_preserved",
-        "asr-env-status" in cli_text and "video_knowledge_pipeline.cli" in wrapper_text,
+        "asr-env-status" in cli_text,
         "the existing detailed ASR diagnostic entrypoint must remain available",
     )
     check(
@@ -176,8 +180,9 @@ def build_quick_health(project_root: str | Path | None = None) -> dict[str, Any]
         },
         "callable": {
             "status": "callable" if ok else "not_callable",
-            "quick_command": "scripts\\video-knowledge.ps1 quick-health",
-            "detailed_asr_command": "scripts\\video-knowledge.ps1 asr-env-status",
+            "quick_command": "python -m video_knowledge_pipeline.quick_health",
+            "detailed_asr_command": "python -m video_knowledge_pipeline.cli asr-env-status",
+            "windows_wrapper": "scripts\\video-knowledge.ps1 quick-health" if wrapper_text else "",
             "asr_capability_evaluated": False,
         },
         "freshness": {

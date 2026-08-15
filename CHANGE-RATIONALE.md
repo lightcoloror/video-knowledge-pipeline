@@ -95,3 +95,41 @@
 - 证据：当前快照 765 个文本 blob 的零 secret 命中；私有历史仅发现已知绝对路径，无 token/key/证件号/手机号命中。
 - 生效范围：离线测试与公开提交；不读取 `.local`、媒体目录或用户凭据。
 - 回滚方式：只允许用更严格或等价的扫描器替代，不能无替代删除门禁。
+
+## 2026-08-15 23:31:04 +08:00 | Codex (GPT-5.6 Sol) | Clone-portable VKP
+
+### CR-20260815-01 — Canonical portable Python front door
+
+- 意图：让公开克隆在 Windows/Linux/macOS 合同下发现并校验 VKP，而不要求 PowerShell、本机端口、模型或相邻仓库。
+- 决策：新增 `video-knowledge-portable` Python CLI、`agent-tool-manifest.v1`、本地 Schemas、合成 Bundle fixture 和哈希绑定 smoke receipt；PowerShell 只保留为可选 Windows wrapper。
+- 理由：发现、合成合同验收和真实 ASR/Provider readiness 是不同事实，不能由一个本机脚本混为“已可用”。
+- 证据：portable/quick-health 定向回归 18/18；doctor 与 smoke 双跑幂等；输出不含主机绝对路径。
+- 生效范围：只读 discovery、静态 doctor、合成 material-manifest 与本地 receipt 验证。
+- 回滚：删除 portable 入口、manifest/Schemas/fixture；原 CLI、MCP、Bundle、Timeline 和 PowerShell wrapper 不变。
+
+### CR-20260815-02 — Semantic Gateway compatibility and portable secret references
+
+- 意图：消除与某个 Gateway Git SHA 和 Windows DPAPI 的不必要运行耦合。
+- 决策：共享 Gateway 依赖改为 `>=0.3,<0.4`，再校验 `model_provider_gateway.adapter_contract.v2`、VKP Broker policy、capability/consent/safety 语义；跨平台 secret 仅声明 env/keyring 引用，DPAPI 标为 Windows legacy adapter。
+- 理由：提交号用于 provenance；真正影响安全执行的是协议、Schema、能力和授权语义。
+- 证据：兼容和不兼容 adapter 负例、exact shared contract bundle SHA 验证、无 secret 读取断言。
+- 生效范围：可选 Gateway mock 与共享包安装；不改 VKP Broker/consent 真源，不授权在线调用或 fallback。
+- 回滚：恢复旧 optional dependency 声明；不会改变本地 Bundle 或凭据存储。
+
+### CR-20260815-03 — Source-reviewed uv and Task orchestration
+
+- 意图：提供跨平台、单命令、可审计的安装与离线验证入口。
+- 决策：复用 uv 的 project/environment 语义与 go-task 的本地 Taskfile；只有 `bootstrap` 可解析依赖，doctor/smoke/validate 强制 `--offline --no-sync`。不使用 remote include 或 `--insecure`。
+- 理由：避免重新实现包管理和任务运行器，也避免“离线 smoke”暗中联网。
+- 证据：uv commit `f1a42680ff5272232d65748acf338b19778dde24`、Task commit `1868ad29698bb336ba76f54bbd9d711c2fa08e8d` 的本地源码复审；Taskfile/CI 静态负例。
+- 生效范围：开发/CI 编排；uv 与 Task 不随 VKP wheel 分发。
+- 回滚：直接使用 Python console/module 命令；生产运行链不受影响。
+
+### CR-20260815-04 — Windows ACL-safe focused tests
+
+- 意图：避免把本机 pytest 全局临时目录的损坏 ACL 误报为 VKP 逻辑失败。
+- 决策：portable 定向测试使用唯一、项目旁、显式清理的短生命周期目录，不更改 pytest 全局配置或生产路径。
+- 理由：提升权限 pytest 启动器无输出挂起；项目旁目录的创建、读写和删除均可验证且不需要跳过断言。
+- 证据：原始错误为 pytest session cleanup `WinError 5`；改造后 18/18 在普通权限下 4.04 秒通过。
+- 生效范围：`test_portable.py` 和 `test_quick_health.py` 的合成副本/漂移测试。
+- 回滚：当 Windows pytest 临时目录 ACL 稳定后可恢复 `tmp_path`；断言和生产代码无需变化。

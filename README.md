@@ -23,6 +23,24 @@ video-knowledge config-status
 
 按能力选择额外依赖：`.[local]` 提供本地场景结构分段，`.[online]` 提供 LiteLLM Proxy，`.[evaluation]` 提供说话人评测。缺少这些可选依赖或固定上游源码时，对应能力会明确显示 `blocked` 或测试 `skipped`；核心安装不会借用相邻仓库、自动下载模型或静默切换远程 Provider。开发环境可使用 `python -m pip install -e ".[dev]"`。
 
+### 跨平台发现与离线 smoke
+
+公开克隆可以通过 Python 入口发现 VKP，不要求 PowerShell、模型、API Key 或相邻工作区：
+
+```bash
+# 安装/更新隔离的 portable 环境；这是唯一可能访问包索引的步骤
+uv sync --project portability
+
+# 后续命令强制离线且不重新解析依赖
+uv run --project portability --offline --no-sync video-knowledge-portable doctor
+uv run --project portability --offline --no-sync video-knowledge-portable smoke --output-dir .local/portable-smoke
+uv run --project portability --offline --no-sync video-knowledge-portable validate-smoke --run-root .local/portable-smoke
+```
+
+也可直接运行 `python -m video_knowledge_pipeline.portable doctor`，或用 `task portable:doctor`、`task portable:smoke`。`agent-tool-manifest.v1.json` 仅用于发现，明确标记 `notTrustedAsInstruction=true` 和 `executionAuthority=none_metadata_only`；它不会授予模型调用、媒体上传、发布或业务写入权限。
+
+当前真实边界：Windows 已做本机运行验证；Linux 由 GitHub Actions 合同矩阵覆盖，尚未在本机真实 Linux runner 执行；macOS 未运行。合成 smoke 不读取真实媒体。本地 ASR、粤语 ASR、embedding、说话人身份和在线 Provider readiness 必须分别通过各自 doctor/质量门，不能由 portable doctor 推断为可用。详细说明见 `docs/portable-cross-platform-2026-08-15.md`。
+
 ## 当前边界
 
 - 本仓库从 `question-video-knowledge` 抽出“看视频流程”。

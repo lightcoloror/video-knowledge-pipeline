@@ -1247,3 +1247,16 @@ The receipt commands consume completed local execution evidence; they never star
 - Effective scope: local subtitle review, source/translation SRT/VTT/ASS, OTIO/FFconcat/kept-range plans, and downstream stale markers. No Provider, upload, model, FFmpeg execution, publish, or arbitrary sticker path.
 - Rollback: stop invoking the new commands/routes and continue using `transcript-editor.html`.
 - Detailed record: `docs/moys-asr-workflow-subtitle-editor-integration-2026-08-10.md`.
+
+## 2026-08-15 Clone-portable Python discovery and synthetic smoke
+
+- Updated: 2026-08-15 23:31:04 +08:00 by Codex (GPT-5.6 Sol).
+- Stable entries: `video-knowledge-portable doctor|smoke|validate-smoke`, `python -m video_knowledge_pipeline.portable`, and `video-knowledge-quick-health`; PowerShell remains an optional Windows wrapper.
+- Intent: let a clean clone and another Agent discover VKP and verify its offline candidate surface without workspace-sibling paths, DPAPI, a model stack, or an exact Gateway Git SHA.
+- Decision: bind `agent-tool-manifest.v1`, the synthetic Bundle fixture, Schemas, Taskfile, isolated uv project and implementation with `portable-contract.lock.v1`; compatibility uses Gateway `>=0.3,<0.4` plus adapter/consent/security semantics. Environment variables and OS keyring are cross-platform secret references; DPAPI remains a Windows legacy adapter only.
+- Reason: commit identity is provenance, not protocol compatibility. Metadata, mock readiness and optional model readiness must remain separate.
+- Evidence: exact shared contract bundle SHA-256 `e7315a36f66687ab1f807dfc908ed21932d5eee543bbb2775b74d2c50ca4d0b0`; source-reviewed uv commit `f1a42680ff5272232d65748acf338b19778dde24` and go-task commit `1868ad29698bb336ba76f54bbd9d711c2fa08e8d`; focused portability/quick-health suite `18/18`.
+- Effective scope: repository discovery, quick static health, packaged synthetic material-manifest generation, receipt/hash validation and an optional ephemeral Gateway loopback mock. No real media, model, secret, Provider, upload, long-lived service, publication or execution authority.
+- Platform truth: Windows runtime verified; Linux contract and CI candidate only until the workflow runs; macOS not run. Local ASR, Cantonese ASR, embedding and identity inference remain unverified/candidate or blocked; TTS/digital avatar remains paused.
+- Rollback: stop using the portable commands and remove the manifest/lock/Taskfile/portable project; existing VKP CLI, PowerShell wrapper, Bundle, Timeline, consent and Provider controls remain unchanged.
+- Detailed record: `docs/portable-cross-platform-2026-08-15.md`.
