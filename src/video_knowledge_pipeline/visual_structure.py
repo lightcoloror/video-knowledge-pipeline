@@ -27,6 +27,7 @@ from .visual_integration import integrated_visual
 STRUCTURED_MATERIAL_TYPES = {"formula", "table", "code"}
 DOCUMENT_VISUAL_TYPES = {"formula", "table", "code", "board", "slide", "document", "diagram", "text"}
 DEFAULT_EBOOK_ROUTES = {"document_visual", "mixed", "semantic_frame", "temporal_sequence"}
+EBOOK_CHECKPOINT_SCHEMA = "video_knowledge_pipeline.ebook_ocr_item_checkpoint.v1"
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
 NON_GENERIC_DOCUMENT_VISUAL_TYPES = DOCUMENT_VISUAL_TYPES - {"text"}
 EXPLICIT_VISUAL_STRUCTURE_ISSUES = {
@@ -68,6 +69,17 @@ def run_visual_structure_plan(
     if not isinstance(manifest, dict):
         raise ValueError("manifest.json must contain a JSON object")
 
+    # Intent: make completed per-frame OCR survive a later process interruption.
+    # Decision: reconcile atomic item checkpoints and legacy on-disk Markdown
+    # before selecting new work. Reason: an OCR artifact can be complete while
+    # the former batch-level Timeline write has not happened yet. Evidence: the
+    # long-video run preserved 12 artifacts on disk but its next pass only saw
+    # the 11 rows written after restart. Effective scope: derived OCR/structured
+    # visual evidence only; original frames, ASR, and Timeline provenance remain
+    # authoritative and no OCR call is performed here.
+    checkpoint_reconciliation = reconcile_ebook_pipeline_checkpoints(root, write=True)
+    manifest = read_json(manifest_path)
+
     timeline = _read_timeline(root)
     routes = {str(route) for route in (include_routes or sorted(DEFAULT_EBOOK_ROUTES)) if str(route)}
     all_candidates = _visual_structure_candidates(root, timeline, include_routes=routes)
@@ -97,6 +109,7 @@ def run_visual_structure_plan(
         "ebook_pipeline_total": len(ebook_results),
         "ebook_pipeline_succeeded": sum(1 for item in ebook_results if item.get("ok")),
         "ebook_pipeline_blockers": _count_ebook_blockers(ebook_results),
+        "checkpoint_reconciliation": checkpoint_reconciliation,
         "include_routes": sorted(routes),
         "updated": backfill.get("updated", 0),
         "ebook_status_updated": ebook_status_backfill.get("updated", 0),
@@ -559,6 +572,7 @@ def _run_ebook_pipeline_candidates(root: Path, candidates: list[dict[str, Any]],
             if not image_path:
                 result["error"] = "missing image_path"
                 result.update(_classify_ebook_blocker(result["error"]))
+                _write_ebook_result_checkpoint(output_dir, result)
                 results.append(result)
                 continue
             try:
@@ -567,8 +581,217 @@ def _run_ebook_pipeline_candidates(root: Path, candidates: list[dict[str, Any]],
                 result["error"] = str(exc)
             if not result.get("ok"):
                 result.update(_classify_ebook_blocker(str(result.get("error") or ""), result=result))
+            _write_ebook_result_checkpoint(output_dir, result)
             results.append(result)
     return results
+
+
+def _write_ebook_result_checkpoint(output_dir: Path, result: dict[str, Any]) -> Path:
+    """Atomically persist one OCR result before the batch advances."""
+    checkpointed_at = str(result.get("checkpointed_at") or now_iso())
+    result["checkpointed_at"] = checkpointed_at
+    path = output_dir / "result-checkpoint.json"
+    write_json(
+        path,
+        {
+            "schema": EBOOK_CHECKPOINT_SCHEMA,
+            "checkpointed_at": checkpointed_at,
+            "result": result,
+        },
+    )
+    return path
+
+
+def reconcile_ebook_pipeline_checkpoints(
+    bundle_dir: str | Path,
+    *,
+    write: bool = True,
+) -> dict[str, Any]:
+    """Recover completed OCR artifacts that were not registered in Timeline.
+
+    The scan is deliberately local and fail-closed: only timeline-namespaced
+    directories below the Bundle are considered, artifact paths must stay below
+    the Bundle, and wrapper-only/empty Markdown is never promoted to evidence.
+    """
+    root = Path(bundle_dir).expanduser().resolve()
+    manifest_path = root / "manifest.json"
+    if not manifest_path.is_file():
+        raise FileNotFoundError(f"bundle missing manifest.json: {root}")
+    manifest = read_json(manifest_path)
+    if not isinstance(manifest, dict):
+        raise ValueError("manifest.json must contain a JSON object")
+    timeline = _read_timeline(root)
+    results: dict[int, dict[str, Any]] = {}
+    invalid: list[dict[str, Any]] = []
+    checkpoint_paths = sorted(
+        (root / "visual-structure").glob(
+            "timeline-*/ebook_pipeline/result-checkpoint.json"
+        )
+    )
+    for checkpoint_path in checkpoint_paths:
+        try:
+            payload = read_json(checkpoint_path)
+        except (OSError, ValueError) as exc:
+            invalid.append({"path": str(checkpoint_path), "reason": str(exc)})
+            continue
+        if not isinstance(payload, dict) or payload.get("schema") != EBOOK_CHECKPOINT_SCHEMA:
+            invalid.append({"path": str(checkpoint_path), "reason": "checkpoint_schema_mismatch"})
+            continue
+        result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
+        index = _int_value(result.get("index"))
+        if not (1 <= index <= len(timeline)):
+            invalid.append({"path": str(checkpoint_path), "reason": "timeline_index_out_of_range"})
+            continue
+        result = dict(result)
+        result["checkpointed_at"] = str(
+            result.get("checkpointed_at")
+            or payload.get("checkpointed_at")
+            or now_iso()
+        )
+        results[index] = result
+
+    # Backward compatibility for artifacts produced before item checkpoints
+    # existed. Prefer a usable Markdown artifact and bind it to the directory's
+    # explicit timeline index; never infer an index from a title or timestamp.
+    visual_root = root / "visual-structure"
+    if visual_root.is_dir():
+        for output_dir in sorted(visual_root.glob("timeline-*/ebook_pipeline")):
+            try:
+                index = int(output_dir.parent.name.removeprefix("timeline-"))
+            except ValueError:
+                continue
+            if index in results or not (1 <= index <= len(timeline)):
+                continue
+            image_path = _candidate_image_path(timeline[index - 1])
+            usable: tuple[Path, str, dict[str, Any]] | None = None
+            for artifact_path in sorted(output_dir.rglob("*.md")):
+                if not artifact_path.is_file() or not _path_is_within(artifact_path, root):
+                    continue
+                markdown = artifact_path.read_text(
+                    encoding="utf-8-sig", errors="replace"
+                )
+                quality = _ebook_markdown_quality(markdown, image_path=image_path)
+                if quality.get("quality") == "usable":
+                    usable = (artifact_path.resolve(), markdown, quality)
+                    break
+            if usable is None:
+                continue
+            artifact_path, markdown, quality = usable
+            completed_at = now_iso()
+            results[index] = {
+                "index": index,
+                "image_path": image_path,
+                "output_dir": str(output_dir.resolve()),
+                "ok": True,
+                "error": "",
+                "artifact": {
+                    "path": str(artifact_path),
+                    "artifact_type": "markdown",
+                    "text": markdown,
+                    "text_encoding_source": "direct_utf8_artifact",
+                },
+                "ebook_quality": quality,
+                "meaningful_text_char_count": int(quality.get("text_char_count") or 0),
+                "meaningful_line_count": int(quality.get("line_count") or 0),
+                "checkpointed_at": completed_at,
+                "recovered_from_legacy_artifact": True,
+            }
+
+    recovered_results = [results[index] for index in sorted(results)]
+    imported_entries = _ebook_results_to_import_rows(recovered_results)
+    before = {
+        index
+        for index, item in enumerate(timeline, start=1)
+        if _candidate_has_meaningful_visual_structure(item)
+    }
+    pending_entries = [
+        entry
+        for entry in imported_entries
+        if not _ebook_entry_registered(timeline, entry)
+    ]
+    pending_status_results = [
+        result
+        for result in recovered_results
+        if not _ebook_status_registered(timeline, result)
+    ]
+    backfill = {"updated": 0, "updated_indexes": [], "source_package_updated": False}
+    status_backfill = {"updated": 0, "updated_indexes": [], "source_package_updated": False}
+    if write and pending_entries:
+        backfill = _backfill_visual_structure_results(root, manifest, timeline, pending_entries)
+        timeline = _read_timeline(root)
+    if write and pending_status_results:
+        status_backfill = _backfill_ebook_pipeline_status(
+            root, manifest, timeline, pending_status_results
+        )
+        timeline = _read_timeline(root)
+    if write and (pending_entries or pending_status_results or invalid):
+        manifest = read_json(manifest_path)
+        if isinstance(manifest, dict):
+            manifest["ebook_checkpoint_reconciliation"] = {
+                "schema": "video_knowledge_pipeline.ebook_checkpoint_reconciliation.v1",
+                "checkpoint_count": len(checkpoint_paths),
+                "result_count": len(recovered_results),
+                "recovered_indexes": sorted(
+                    index
+                    for index, item in enumerate(timeline, start=1)
+                    if index not in before
+                    and _candidate_has_meaningful_visual_structure(item)
+                ),
+                "invalid_count": len(invalid),
+                "updated_at": now_iso(),
+            }
+            manifest["coverage"] = _coverage_audit(timeline)
+            manifest["quality_audit"] = _quality_audit(timeline)
+            manifest["repair_status"] = build_repair_status(manifest, timeline)
+            write_json(manifest_path, manifest)
+    recovered_indexes = sorted(
+        index
+        for index in results
+        if index not in before
+        and any(_int_value(row.get("index")) == index for row in imported_entries)
+    )
+    return {
+        "schema": "video_knowledge_pipeline.ebook_checkpoint_reconciliation.v1",
+        "status": "degraded" if invalid else "completed",
+        "write": bool(write),
+        "checkpoint_count": len(checkpoint_paths),
+        "result_count": len(recovered_results),
+        "recovered_count": len(recovered_indexes),
+        "recovered_indexes": recovered_indexes,
+        "invalid_count": len(invalid),
+        "invalid": invalid,
+        "backfill": backfill,
+        "status_backfill": status_backfill,
+    }
+
+
+def _ebook_entry_registered(
+    timeline: list[dict[str, Any]], entry: dict[str, Any]
+) -> bool:
+    index = _int_value(entry.get("index"))
+    if not (1 <= index <= len(timeline)):
+        return False
+    markdown = str(entry.get("markdown") or "").strip()
+    for value in timeline[index - 1].get("structured_visual") or []:
+        if (
+            isinstance(value, dict)
+            and str(value.get("source") or "") == "ebook_markdown_pipeline"
+            and str(value.get("markdown") or "").strip() == markdown
+        ):
+            return True
+    return False
+
+
+def _ebook_status_registered(
+    timeline: list[dict[str, Any]], result: dict[str, Any]
+) -> bool:
+    index = _int_value(result.get("index"))
+    if not (1 <= index <= len(timeline)):
+        return False
+    current = timeline[index - 1].get("ebook_pipeline_status")
+    if not isinstance(current, dict):
+        return False
+    return current == _ebook_pipeline_status_from_result(result)
 
 
 def _count_ebook_blockers(results: list[dict[str, Any]]) -> dict[str, int]:
@@ -1405,7 +1628,7 @@ def _ebook_pipeline_status_from_result(result: dict[str, Any]) -> dict[str, Any]
         "output_dir": str(result.get("output_dir") or ""),
         "meaningful_text_char_count": int(result.get("meaningful_text_char_count") or quality.get("text_char_count") or 0),
         "meaningful_line_count": int(result.get("meaningful_line_count") or quality.get("line_count") or 0),
-        "updated_at": now_iso(),
+        "updated_at": str(result.get("checkpointed_at") or now_iso()),
     }
     if result.get("error"):
         status["error"] = str(result.get("error") or "")

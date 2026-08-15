@@ -26,6 +26,7 @@ from .transcript_quality_gate import run_transcript_quality_gate
 from .transcript_speakers import cue_speaker, speaker_display_name, speaker_label_map
 from .transcript_semantic_correction import transcript_semantic_correction_status
 from .transcript_sidecar import ensure_review_transcript_sidecar
+from .visual_structure import reconcile_ebook_pipeline_checkpoints
 
 
 EXPORT_SCHEMA = "lecture_knowledge_note_export.v1"
@@ -48,6 +49,11 @@ def export_knowledge_note(
         raise FileNotFoundError(f"manifest not found: {manifest_path}")
     if not timeline_path.exists():
         raise FileNotFoundError(f"timeline not found: {timeline_path}")
+    # Reuse the OCR item's atomic checkpoint before any export reads coverage.
+    # This is local reconciliation only: it never starts OCR or a model call.
+    ebook_checkpoint_reconciliation = reconcile_ebook_pipeline_checkpoints(
+        root, write=write
+    )
     transcript_evidence_check = _safe_transcript_evidence_check(root, write=write) if run_transcript_evidence_check else {
         "status": "skipped",
         "ok": True,
@@ -184,6 +190,7 @@ def export_knowledge_note(
         "term_correction": term_correction,
         "transcript_semantic_correction": transcript_semantic_correction,
         "transcript_evidence_correction_pipeline": transcript_evidence_check,
+        "ebook_checkpoint_reconciliation": ebook_checkpoint_reconciliation,
         "transcript_quality_gate": transcript_quality_gate,
         "summary": summary,
         "write": write,

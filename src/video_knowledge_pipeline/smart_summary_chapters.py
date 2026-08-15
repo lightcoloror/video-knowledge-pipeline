@@ -26,6 +26,17 @@ ACTION_TERMS = ("要", "需要", "可以", "先", "再", "最后", "准备", "�
 EXPRESSION_TERMS = ("我", "你", "客户", "我们", "对方", "怎么", "为什么", "是不是", "能不能", "先", "不用", "不要")
 SOFT_BOUNDARY_TERMS = ("首先", "第二", "第三", "第四", "最后", "接下来", "另外", "同时", "因为", "所以", "但是", "比如", "如果", "那么", "我们要", "大家要", "客户会", "客户可能", "这一步", "这个时候")
 FILLERS = ("然后呢", "就是说", "也就是说", "对吧", "是不是", "对不对", "其实", "那么", "这个", "那个", "就是", "啊", "呃", "嗯", "哈")
+NON_TOPIC_PATTERNS = (
+    r"^(您已|已经)?(静音|解除静音|开启摄像头|关闭摄像头)$",
+    r"^(开始|停止)?共享屏幕$",
+    r"^(加入|离开|结束)会议$",
+    r"^(会议|直播)(已经)?开始$",
+    r"^网络(连接)?(不稳定|异常)$",
+    r"^(正在)?录制(中)?$",
+    r"^(下面|接下来)(有请|请).{0,18}(分享|发言)$",
+    r"^感谢.{0,18}(分享|发言)$",
+    r"^(业绩|排名|出勤)(播报|通报).{0,20}$",
+)
 
 
 def build_smart_summary_chapter_pack(
@@ -101,6 +112,16 @@ def build_smart_summary_chapter_pack(
         "chapters": chapters,
         "timeline_coverage_quality": timeline_coverage_quality,
         "quality_notes": _quality_notes(pack, chapters, timeline_coverage_quality),
+        "reader_summary_policy": {
+            "chapter_map_is_final_summary": False,
+            "global_reduce_required": True,
+            "non_topic_noise_filtered": True,
+            "non_topic_noise_categories": [
+                "meeting_ui",
+                "host_transition",
+                "performance_announcement",
+            ],
+        },
         "artifacts": {
             "json": str(root / "exports" / "smart-summary-chapters.json"),
             "markdown": str(root / "exports" / "smart-summary-chapters.md"),
@@ -712,6 +733,8 @@ def _ranked_sentences(bucket: list[dict[str, Any]]) -> list[str]:
     rows = []
     for row in bucket:
         for sentence in _split_sentences(_segment_text(row)):
+            if _is_non_topic_noise(sentence):
+                continue
             score = _sentence_score(sentence, TEACHING_TERMS)
             rows.append((score, sentence))
     rows.sort(key=lambda item: (-item[0], len(item[1])))
@@ -723,6 +746,8 @@ def _ranked_snippets(bucket: list[dict[str, Any]], keywords: tuple[str, ...], *,
     for row in bucket:
         start = _seconds(row.get("start"))
         for sentence in _split_sentences(_segment_text(row)):
+            if _is_non_topic_noise(sentence):
+                continue
             score = _sentence_score(sentence, keywords)
             if score <= 0:
                 continue
@@ -752,7 +777,7 @@ def _visual_notes_for_range(visual_digest: dict[str, Any], start: float, end: fl
         if item_end < start or item_start > end:
             continue
         text = _visual_text(item)
-        if not text:
+        if not text or _is_non_topic_noise(text):
             continue
         notes.append({"time": item.get("start_time") or format_timestamp(item_start), "timeline_index": item.get("timeline_index"), "route": item.get("visual_route") or "", "text": text})
     return notes
@@ -775,11 +800,21 @@ def _visual_text(item: dict[str, Any]) -> str:
 def _chapter_title(index: int, sentences: list[str], visual_notes: list[dict[str, Any]]) -> str:
     if visual_notes:
         text = str(visual_notes[0].get("text") or "").strip()
-        if text:
+        if text and not _is_non_topic_noise(text):
             return _clip(text, 28)
     if sentences:
-        return _clip(sentences[0], 28)
-    return f"第 {index} 段"
+        for sentence in sentences:
+            if not _is_non_topic_noise(sentence):
+                return _clip(sentence, 28)
+    return f"第 {index} 部分（主题待提炼）"
+
+
+def _is_non_topic_noise(value: Any) -> bool:
+    """Filter UI/host boilerplate without modifying the source transcript."""
+    text = re.sub(r"[\s，,。.!！?？:：;；]+", "", str(value or "").strip())
+    if not text or len(text) > 48:
+        return False
+    return any(re.fullmatch(pattern, text) for pattern in NON_TOPIC_PATTERNS)
 
 
 def _quality_notes(

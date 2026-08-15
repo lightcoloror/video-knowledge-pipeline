@@ -7,7 +7,7 @@
     },
     "ebook_markdown_pipeline_http": {
       "host": "127.0.0.1",
-      "port": 8765,
+      "port": 9241,
       "path": "/call"
     },
     "openclaw_http": {

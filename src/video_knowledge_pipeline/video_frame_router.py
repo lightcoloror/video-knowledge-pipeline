@@ -12,12 +12,23 @@ from .visual_integration import integrated_visual
 
 
 ROUTES = {"document_visual", "semantic_frame", "temporal_sequence", "mixed", "unknown"}
+DOCUMENT_VISUAL_TYPES = {
+    "formula",
+    "table",
+    "code",
+    "board",
+    "slide",
+    "document",
+    "diagram",
+    "text",
+}
 
 
 def run_video_frame_router(
     bundle_dir: str | Path,
     *,
     input_json: str | Path | None = None,
+    content_profile: str = "auto",
     write: bool = True,
 ) -> dict[str, Any]:
     """Classify timeline frames into document, semantic-frame, or temporal visual routes."""
@@ -30,13 +41,20 @@ def run_video_frame_router(
     if not isinstance(manifest, dict):
         raise ValueError("manifest.json must contain a JSON object")
     timeline = _read_timeline(root)
+    resolved_profile = _resolve_content_profile(
+        manifest, timeline, requested=content_profile
+    )
 
     imported = _read_route_input(input_json) if input_json else []
     imported_by_index = {int(row["index"]): row for row in imported if _int_value(row.get("index")) > 0}
     items: list[dict[str, Any]] = []
     updated_indexes: list[int] = []
     for index, item in enumerate(timeline, start=1):
-        route = _normalise_imported_route(imported_by_index.get(index)) if index in imported_by_index else _route_item(item)
+        route = (
+            _normalise_imported_route(imported_by_index.get(index))
+            if index in imported_by_index
+            else _route_item(item, content_profile=resolved_profile)
+        )
         route["index"] = index
         route["start"] = item.get("start", 0)
         route["end"] = item.get("end", 0)
@@ -53,6 +71,7 @@ def run_video_frame_router(
         "total": len(items),
         "write": write,
         "input_json": str(Path(input_json).expanduser()) if input_json else "",
+        "content_profile": resolved_profile,
         "updated": len(updated_indexes) if write else 0,
         "routes": {route: sum(1 for item in items if item.get("visual_route") == route) for route in sorted(ROUTES)},
         "low_confidence": sum(1 for item in items if float(item.get("confidence") or 0) < 0.6),
@@ -109,7 +128,9 @@ def write_video_frame_router_input_template(root: str | Path, items: list[dict[s
     return path
 
 
-def _route_item(item: dict[str, Any]) -> dict[str, Any]:
+def _route_item(
+    item: dict[str, Any], *, content_profile: str = "general"
+) -> dict[str, Any]:
     text = "\n".join(
         [
             str(item.get("transcript") or ""),
@@ -139,6 +160,14 @@ def _route_item(item: dict[str, Any]) -> dict[str, Any]:
         route = "document_visual"
         confidence = min(0.9, 0.45 + 0.12 * document_score)
         reasons = document_reasons
+    elif (
+        content_profile == "lecture-slides-v1"
+        and _lecture_document_signal(item, material_types)
+        and not _strong_semantic_signal(item, text, material_types)
+    ):
+        route = "document_visual"
+        confidence = min(0.82, 0.62 + 0.1 * document_score)
+        reasons = [*document_reasons, "lecture_slides_ocr_first"]
     elif semantic_score >= 1:
         route = "semantic_frame"
         confidence = min(0.8, 0.45 + 0.1 * semantic_score)
@@ -197,9 +226,9 @@ def _score_temporal(item: dict[str, Any], text: str, frame_count: int) -> tuple[
 def _score_semantic(item: dict[str, Any], text: str, material_types: set[str], frame_count: int) -> tuple[int, list[str]]:
     score = 0
     reasons: list[str] = []
-    if frame_count:
-        score += 1
-        reasons.append("frame_available")
+    # A frame existing is a system fact, not evidence that a multimodal model is
+    # needed. The former baseline promoted every otherwise-unclassified slide to
+    # semantic_frame and created exhaustive remote-review blockers.
     if material_types & {"image", "screen", "object", "demo", "experiment", "interface"}:
         score += 1
         reasons.append("visual_semantic_material_type")
@@ -207,6 +236,81 @@ def _score_semantic(item: dict[str, Any], text: str, material_types: set[str], f
         score += 1
         reasons.append("semantic_visual_keyword")
     return score, reasons
+
+
+def _strong_semantic_signal(
+    item: dict[str, Any], text: str, material_types: set[str]
+) -> bool:
+    if material_types & {"image", "object", "demo", "experiment"}:
+        return True
+    return any(
+        word in text
+        for word in (
+            "gesture",
+            "point",
+            "spatial",
+            "demo",
+            "experiment",
+            "动作",
+            "指向",
+            "空间",
+            "实验",
+            "实物",
+        )
+    ) or bool(item.get("non_text_visual_information"))
+
+
+def _lecture_document_signal(
+    item: dict[str, Any], material_types: set[str]
+) -> bool:
+    return bool(
+        material_types & (DOCUMENT_VISUAL_TYPES | {"screen", "interface"})
+        or str(item.get("visual_text") or item.get("ocr_text") or "").strip()
+    )
+
+
+def _resolve_content_profile(
+    manifest: dict[str, Any],
+    timeline: list[dict[str, Any]],
+    *,
+    requested: str,
+) -> str:
+    """Resolve the OCR-first lecture profile without guessing from a title."""
+    value = str(requested or "auto").strip().lower()
+    aliases = {
+        "lecture": "lecture-slides-v1",
+        "slides": "lecture-slides-v1",
+        "ppt": "lecture-slides-v1",
+        "lecture-slides": "lecture-slides-v1",
+        "general": "general",
+    }
+    value = aliases.get(value, value)
+    if value not in {"auto", "general", "lecture-slides-v1"}:
+        raise ValueError("content_profile must be auto, general, or lecture-slides-v1")
+    if value != "auto":
+        return value
+    explicit = str(
+        manifest.get("content_profile")
+        or manifest.get("video_content_profile")
+        or manifest.get("processing_preset")
+        or ""
+    ).strip().lower()
+    explicit = aliases.get(explicit, explicit)
+    if explicit in {"general", "lecture-slides-v1"}:
+        return explicit
+    if not timeline:
+        return "general"
+    document_items = 0
+    for item in timeline:
+        material_types = {
+            str(entry).strip().lower()
+            for entry in item.get("material_types") or []
+        }
+        visual_text = str(item.get("visual_text") or "").strip()
+        if material_types & DOCUMENT_VISUAL_TYPES or len(visual_text) >= 20:
+            document_items += 1
+    threshold = max(2, (len(timeline) + 1) // 2)
+    return "lecture-slides-v1" if document_items >= threshold else "general"
 
 
 def _normalise_imported_route(row: dict[str, Any] | None) -> dict[str, Any]:

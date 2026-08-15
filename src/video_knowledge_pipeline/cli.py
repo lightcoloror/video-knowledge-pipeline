@@ -6,6 +6,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from .cli_output import render_cli_result
+
 from .acceptance_check import acceptance_check
 from .path_defaults import provider_env_file, workspace_root
 from .acceptance_run import run_acceptance_bundle, run_acceptance_run
@@ -235,7 +237,10 @@ from .webui_bridge import refresh_bundle_review_html
 def main(argv: list[str] | None = None) -> int:
     _configure_stdout()
     parser = build_parser()
-    args = parser.parse_args(argv)
+    cli_argv = list(argv) if argv is not None else list(sys.argv[1:])
+    verbose = "--verbose" in cli_argv
+    cli_argv = [value for value in cli_argv if value != "--verbose"]
+    args = parser.parse_args(cli_argv)
 
     if args.command == "execute-consented-model-task":
         result, exit_code = run_consented_model_task_cli(
@@ -243,7 +248,7 @@ def main(argv: list[str] | None = None) -> int:
             route_revision=args.route_revision,
             write=args.write,
         )
-        print(json.dumps(result, ensure_ascii=False, indent=2))
+        print(render_cli_result(result, verbose=verbose))
         return exit_code
 
     if args.command == "model-business-authorization-create":
@@ -1166,7 +1171,12 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "review-closure-status":
         result = review_closure_status(args.bundle_dir, write=not args.no_write)
     elif args.command == "run-video-frame-router":
-        result = run_video_frame_router(args.bundle_dir, input_json=args.input_json, write=not args.no_write)
+        result = run_video_frame_router(
+            args.bundle_dir,
+            input_json=args.input_json,
+            content_profile=args.content_profile,
+            write=not args.no_write,
+        )
     elif args.command == "import-tagger-annotations":
         result = import_tagger_annotations(args.bundle_dir, args.tagger_json, source=args.source, write=not args.no_write)
     elif args.command == "run-general-tagger":
@@ -2288,7 +2298,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(f"unknown command: {args.command}")
         return 2
 
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    print(render_cli_result(result, verbose=verbose))
     return 0
 
 
@@ -2708,6 +2718,11 @@ def _configure_stdout() -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="video-knowledge", description="Video-first knowledge extraction pipeline")
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Print the complete JSON result; large results are concise by default",
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
 
@@ -3771,6 +3786,12 @@ def build_parser() -> argparse.ArgumentParser:
     router = sub.add_parser("run-video-frame-router", help="Route frames into document, semantic, temporal, mixed, or unknown visual branches")
     router.add_argument("bundle_dir")
     router.add_argument("--input-json")
+    router.add_argument(
+        "--content-profile",
+        choices=["auto", "general", "lecture-slides-v1"],
+        default="auto",
+        help="lecture-slides-v1 keeps static slides OCR-first and only escalates explicit non-text semantics",
+    )
     router.add_argument("--no-write", action="store_true")
 
     tagger_import = sub.add_parser("import-tagger-annotations", help="Import Qinglong/manual tagger timeline annotations into the unified timeline")
