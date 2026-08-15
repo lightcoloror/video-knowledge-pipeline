@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import mimetypes
 from importlib import metadata
@@ -10,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .canonical_json import canonical_json_sha256
+from .file_hash import sha256_file
 from .model_provider_gateway_adapter import SharedGatewayUnavailable, _shared
 from .storage import bundle_write_lock, write_json
 
@@ -500,7 +500,7 @@ def _artifact_identities(
         rows.append(
             {
                 "artifact_id": f"artifact-{index + 1:04d}",
-                "sha256": _sha256_file(path),
+                "sha256": sha256_file(path),
                 "bytes": path.stat().st_size,
                 "mime_type": mime_type.lower(),
             }
@@ -525,11 +525,11 @@ def _runtime_binding(
     modules_path = model_path / "modules.json" if model_path else None
     return {
         "runtime_path_provided": embedding_python is not None,
-        "runtime_sha256": _sha256_file(python_path)
+        "runtime_sha256": sha256_file(python_path)
         if python_path and python_path.is_file()
         else None,
         "model_path_provided": embedding_model is not None,
-        "model_revision": _sha256_file(modules_path)
+        "model_revision": sha256_file(modules_path)
         if modules_path and modules_path.is_file()
         else None,
         "model_source": "explicit_local_files_only",
@@ -577,11 +577,3 @@ def _safe_error_class(exc: Exception) -> str:
     if "timeout" in text or "timed out" in text:
         return "timeout"
     return "embedding_contract_blocked"
-
-
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()

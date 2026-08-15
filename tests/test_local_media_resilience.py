@@ -60,6 +60,15 @@ def _install_fake_qwen_runtime(monkeypatch: pytest.MonkeyPatch, *, fail_chunk: i
         "video_knowledge_pipeline.qwen3_asr_python_runner._audio_chunks",
         fake_chunks,
     )
+    monkeypatch.setattr(
+        "video_knowledge_pipeline.qwen3_asr_python_runner._model_ready",
+        lambda *, preset, model: {
+            "ready": True,
+            "status": "fixture_ready",
+            "preset": preset,
+            "cache_matches": [model],
+        },
+    )
 
 
 def test_local_qwen_asr_multi_chunk_completed_and_progress_monotonic(
