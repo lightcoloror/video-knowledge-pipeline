@@ -134,6 +134,7 @@ from .run_artifact_registry import build_run_artifact_registry
 from .screen_text_recovery import run_screen_text_recovery
 from .scene_detection_adapter import run_scene_detection
 from .scene_candidate_evidence import build_scene_candidate_evidence
+from .campplus_speaker_center_sidecar import build_campplus_speaker_center_sidecar
 from .speaker_global_alignment import (
     bind_local_voiceprint_role,
     build_speaker_global_alignment,
@@ -141,6 +142,7 @@ from .speaker_global_alignment import (
     enroll_local_voiceprints,
     match_local_voiceprints,
 )
+from .speaker_shared_session_alignment import build_shared_session_speaker_alignment
 from .technical_shot_detection import run_technical_shot_detection
 from .technical_shot_fusion import fuse_technical_shot_boundaries
 from .shot_breakdown import build_shot_breakdown
@@ -393,6 +395,12 @@ def main(argv: list[str] | None = None) -> int:
                 media_paths=args.media_path,
                 samples_per_bundle=args.samples_per_bundle,
                 sample_seconds=args.sample_seconds,
+                asr_language=args.asr_language,
+                asr_context_hotwords=[
+                    value.strip()
+                    for value in args.asr_context_hotwords.split(",")
+                    if value.strip()
+                ],
                 execute_clips=args.execute_clips,
                 legacy_reference_manifest=args.legacy_reference_manifest or None,
                 write=not args.no_write,
@@ -918,6 +926,27 @@ def main(argv: list[str] | None = None) -> int:
             similarity_threshold=args.similarity_threshold,
             overlap_agreement_threshold=args.overlap_agreement_threshold,
             max_speakers=args.max_speakers,
+            expected_speaker_count=args.expected_speakers,
+            write=not args.no_write,
+        )
+    elif args.command == "speaker-center-sidecar":
+        result = build_campplus_speaker_center_sidecar(
+            args.chunked_output,
+            args.media_path,
+            args.output_dir,
+            expected_speaker_count=args.expected_speakers,
+            device=args.device,
+            max_evidence_seconds=args.max_evidence_seconds,
+            execute=args.execute,
+            write=not args.no_write,
+        )
+    elif args.command == "speaker-shared-session-align":
+        result = build_shared_session_speaker_alignment(
+            args.private_centers,
+            args.candidate_transcripts,
+            args.output_dir,
+            expected_speaker_count=args.expected_speakers,
+            confirm_shared_participant_set=args.confirm_shared_participant_set,
             write=not args.no_write,
         )
     elif args.command == "speaker-voiceprint":
@@ -3119,7 +3148,39 @@ def build_parser() -> argparse.ArgumentParser:
     speaker_global.add_argument("--similarity-threshold", type=float, default=0.60)
     speaker_global.add_argument("--overlap-agreement-threshold", type=float, default=0.80)
     speaker_global.add_argument("--max-speakers", type=int, default=15)
+    speaker_global.add_argument(
+        "--expected-speakers",
+        type=int,
+        default=None,
+        help="Operator-confirmed recording participant count; repairs over-splitting without inferring roles",
+    )
     speaker_global.add_argument("--no-write", action="store_true")
+
+    speaker_centers = sub.add_parser(
+        "speaker-center-sidecar",
+        help="Extract local CAM++ centers from existing timed ASR without rerunning ASR",
+    )
+    speaker_centers.add_argument("chunked_output")
+    speaker_centers.add_argument("media_path")
+    speaker_centers.add_argument("output_dir")
+    speaker_centers.add_argument("--expected-speakers", type=int, default=None)
+    speaker_centers.add_argument("--device", choices=("cuda",), default="cuda")
+    speaker_centers.add_argument("--max-evidence-seconds", type=float, default=30.0)
+    speaker_centers.add_argument("--execute", action="store_true")
+    speaker_centers.add_argument("--no-write", action="store_true")
+
+    shared_session = sub.add_parser(
+        "speaker-shared-session-align",
+        help="Align recordings explicitly confirmed to share one participant set",
+    )
+    shared_session.add_argument("output_dir")
+    shared_session.add_argument("--private-centers", action="append", required=True)
+    shared_session.add_argument(
+        "--candidate-transcript", dest="candidate_transcripts", action="append", required=True
+    )
+    shared_session.add_argument("--expected-speakers", type=int, required=True)
+    shared_session.add_argument("--confirm-shared-participant-set", action="store_true")
+    shared_session.add_argument("--no-write", action="store_true")
 
     voiceprint = sub.add_parser(
         "speaker-voiceprint",
@@ -3643,6 +3704,12 @@ def build_parser() -> argparse.ArgumentParser:
     benchmark.add_argument("--media-path", action="append", default=[], help="Repeat once per bundle to provide the current local video path")
     benchmark.add_argument("--samples-per-bundle", type=int, default=8)
     benchmark.add_argument("--sample-seconds", type=float, default=60.0)
+    benchmark.add_argument("--asr-language", default="zh", help="Source language for local ASR variants, for example yue for Cantonese")
+    benchmark.add_argument(
+        "--asr-context-hotwords",
+        default="",
+        help="Comma-separated evidence-derived vocabulary passed only as ASR context; never expected transcript text",
+    )
     benchmark.add_argument("--execute-clips", action="store_true", help="Generate local WAV clips for human annotation")
     benchmark.add_argument("--legacy-reference-manifest", default="", help="Carry completed legacy fixed-window references into aligned samples for boundary-extension review")
     benchmark.add_argument("--variants", default="sensevoice_raw,sensevoice_full_punc,qwen3_asr_1_7b", help="Comma-separated local ASR variants for execute-variants")

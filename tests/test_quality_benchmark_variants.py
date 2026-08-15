@@ -239,6 +239,61 @@ def test_qwen_benchmark_variant_disables_inline_forced_alignment(tmp_path: Path)
     assert captured[0]["qwen_timestamps"] is False
 
 
+def test_qwen_benchmark_uses_sample_language_and_evidence_context(tmp_path: Path) -> None:
+    manifest = _manifest(tmp_path / "benchmark-qwen-cantonese")
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    sample = payload["samples"][0]
+    sample["asr_language"] = "yue"
+    sample["context_hotwords"] = ["重疾险", "免赔额"]
+    manifest.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    captured: list[dict] = []
+
+    def builder(workspace: Path, clip: Path, **kwargs):
+        captured.append(kwargs)
+        return _plan_builder(workspace, clip, **kwargs)
+
+    execute_quality_benchmark_variants(
+        manifest,
+        variants=["qwen3_asr_1_7b"],
+        execute=False,
+        plan_builder=builder,
+    )
+
+    assert captured[0]["language"] == "yue"
+    assert captured[0]["hotword"] == "重疾险 免赔额"
+
+
+def test_quality_benchmark_build_persists_deduplicated_context_hotwords(tmp_path: Path) -> None:
+    from video_knowledge_pipeline.quality_benchmark import build_quality_benchmark
+
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    transcript = bundle / "transcript.json"
+    transcript.write_text(
+        json.dumps(
+            {"segments": [{"index": 1, "start": 0, "end": 5, "text": "粤语采访测试。"}]},
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (bundle / "manifest.json").write_text(
+        json.dumps({"corrected_transcript_json": str(transcript)}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    result = build_quality_benchmark(
+        tmp_path / "benchmark",
+        bundle_dirs=[bundle],
+        samples_per_bundle=1,
+        sample_seconds=5,
+        asr_language="yue",
+        asr_context_hotwords=["质子治疗", "保险理赔", "质子治疗", ""],
+    )
+
+    assert result["context_hotwords"] == ["质子治疗", "保险理赔"]
+    assert result["samples"][0]["context_hotwords"] == ["质子治疗", "保险理赔"]
+
+
 def test_contextual_paraformer_variants_keep_no_hotword_and_evidence_hotword_independent(tmp_path: Path) -> None:
     manifest = _manifest(tmp_path / "benchmark-contextual")
     payload = json.loads(manifest.read_text(encoding="utf-8"))

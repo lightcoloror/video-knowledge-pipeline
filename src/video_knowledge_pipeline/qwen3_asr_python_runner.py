@@ -13,6 +13,7 @@ from typing import Any, Callable
 
 from .local_media_progress import LocalMediaProgress, stderr_progress_callback
 from .media_tools import resolve_media_tool
+from .asr_runner import _model_ready
 from .storage import read_json, write_json
 
 
@@ -96,6 +97,20 @@ def run_qwen3_asr(
     if not media.exists():
         payload = _failure(output, "input_not_found", f"input not found: {media}", model=model)
         return _finalize_payload(payload, output, report_path, progress)
+    preset = "qwen3-forced-aligner" if "ForcedAligner" in model else (
+        "qwen3-asr-0.6b" if "0.6B" in model else "qwen3-asr-1.7b"
+    )
+    readiness = _model_ready(preset=preset, model=model)
+    if not readiness.get("ready"):
+        payload = _failure(
+            output,
+            "qwen3_asr_model_not_ready",
+            f"local Qwen snapshot is not complete: {readiness.get('status')}",
+            model=model,
+        )
+        payload["model_readiness"] = readiness
+        return _finalize_payload(payload, output, report_path, progress)
+    model_source = str((readiness.get("cache_matches") or [model])[0])
     try:
         import torch
         from qwen_asr import Qwen3ASRModel
@@ -116,7 +131,7 @@ def run_qwen3_asr(
         kwargs["forced_aligner_kwargs"] = {"dtype": dtype, "device_map": kwargs["device_map"]}
     try:
         progress.emit(stage="model_load", percent=5, message=f"Loading {model} on {selected_device}")
-        runtime = Qwen3ASRModel.from_pretrained(model, **kwargs)
+        runtime = Qwen3ASRModel.from_pretrained(model_source, **kwargs)
     except RuntimeError as exc:
         code = "qwen3_asr_cuda_oom" if "out of memory" in str(exc).lower() else "qwen3_asr_runtime_failed"
         payload = _failure(output, code, str(exc), model=model)
@@ -516,7 +531,25 @@ def _language(value: str) -> str | None:
     text = str(value or "").strip()
     if not text or text.lower() == "auto":
         return None
-    aliases = {"zh": "Chinese", "zh-cn": "Chinese", "cn": "Chinese", "en": "English"}
+    # Intent: make the existing VKP/FunASR ``yue`` contract select Qwen's
+    # reviewed Cantonese decoder instead of passing an unsupported alias.
+    # Decision: keep aliases at the adapter boundary and forward Qwen's
+    # canonical language name to the upstream package.
+    # Reason: quality-benchmark and plan-asr historically share ISO-style
+    # language values; Qwen3-ASR validates canonical display names.
+    # Evidence: the pinned qwen-asr 0.0.6 model config lists ``Cantonese`` and
+    # its ``transcribe`` API validates the supplied language before inference.
+    # Effective scope: local Qwen3-ASR requests only; SenseVoice and transcript
+    # text remain unchanged.
+    aliases = {
+        "zh": "Chinese",
+        "zh-cn": "Chinese",
+        "cn": "Chinese",
+        "yue": "Cantonese",
+        "zh-yue": "Cantonese",
+        "cantonese": "Cantonese",
+        "en": "English",
+    }
     return aliases.get(text.lower(), text)
 
 

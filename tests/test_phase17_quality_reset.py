@@ -10,7 +10,7 @@ from video_knowledge_pipeline.cli import _mcp_callables
 
 from video_knowledge_pipeline.asr_consensus import build_asr_consensus
 from video_knowledge_pipeline.asr_runner import plan_asr_run
-from video_knowledge_pipeline.quality_benchmark import _aligned_sample_window, _align_window_to_vad_segments, _asr_disagreement, _merged_review_seed, _timestamp_errors, build_quality_benchmark, run_quality_benchmark
+from video_knowledge_pipeline.quality_benchmark import _aligned_sample_window, _align_window_to_vad_segments, _asr_disagreement, _baseline_asr_text, _merged_review_seed, _timestamp_errors, build_quality_benchmark, run_quality_benchmark
 from video_knowledge_pipeline.quality_console import export_quality_console
 from video_knowledge_pipeline.semantic_chapter_plan import build_semantic_chapter_plan
 from video_knowledge_pipeline.transcript_evidence_correction_pipeline import _quality_profile_execution
@@ -252,6 +252,72 @@ def test_asr_disagreement_prioritizes_real_number_conflicts_without_human_refere
     assert result["review_priority"] == "high"
     assert result["number_conflicts"] == ["200万元", "300万元"]
 
+
+def test_baseline_asr_text_reuses_source_bound_draft_when_variant_is_absent() -> None:
+    assert _baseline_asr_text({}, {"asr_draft_text": "已有 SenseVoice 粤语草稿"}) == "已有 SenseVoice 粤语草稿"
+    assert (
+        _baseline_asr_text(
+            {"sensevoice_full_punc": "独立重跑结果"},
+            {"asr_draft_text": "已有草稿"},
+        )
+        == "独立重跑结果"
+    )
+
+
+def test_quality_benchmark_compares_qwen_with_source_bound_asr_draft(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.json"
+    qwen = tmp_path / "qwen.json"
+    source.write_text(
+        json.dumps(
+            {"segments": [{"start": 0.0, "end": 5.0, "text": "治疗需要二十八日。"}]},
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    qwen.write_text(
+        json.dumps(
+            {"segments": [{"start": 0.0, "end": 5.0, "text": "治疗需要二十日。"}]},
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    manifest = tmp_path / "quality-benchmark-manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema": "video_knowledge_pipeline.quality_benchmark_manifest.v1",
+                "window_strategy": "asr_vad_sentence_aligned_v1",
+                "candidate_variant": "qwen3_asr_1_7b",
+                "samples": [
+                    {
+                        "sample_id": "detail-001",
+                        "start_seconds": 0.0,
+                        "end_seconds": 5.0,
+                        "source_transcript": str(source),
+                        "asr_draft_text": "治疗需要二十八日。",
+                        "asr_draft_source": str(source),
+                        "boundary_alignment": {"ready": True},
+                        "human_review_status": "asr_prefilled_todo",
+                        "variants": {"qwen3_asr_1_7b": str(qwen)},
+                    }
+                ],
+                "summary_blind_review": {"required": False, "items": []},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    result = run_quality_benchmark(manifest, write=False)
+
+    disagreement = result["samples"][0]["asr_disagreement"]
+    assert disagreement["available"] is True
+    assert disagreement["review_priority"] == "high"
+    assert set(disagreement["number_conflicts"]) == {"二十八日", "二十日"}
+    assert result["asr_disagreement_summary"]["compared_count"] == 1
+
 def test_quality_benchmark_prefers_real_vad_boundaries_over_estimated_asr_chunks() -> None:
     segments = [
         {"start": 12.0, "end": 28.0},
@@ -400,11 +466,19 @@ def test_qwen3_plan_uses_official_runner_and_five_minute_chunks(tmp_path: Path, 
     monkeypatch.setattr("video_knowledge_pipeline.asr_runner._local_qwen_model_path", lambda preset: None)
     monkeypatch.setattr("video_knowledge_pipeline.asr_runner._local_qwen_aligner_path", lambda: None)
 
-    result = plan_asr_run(project, media, preset="qwen3-asr-1.7b")
+    result = plan_asr_run(
+        project,
+        media,
+        preset="qwen3-asr-1.7b",
+        language="yue",
+        hotword="重疾险 免赔额",
+    )
 
     assert result["runner"] == "qwen3_asr_python"
     assert "Qwen/Qwen3-ASR-1.7B" in result["command"]
     assert result["command"][result["command"].index("--chunk-seconds") + 1] == "300"
+    assert result["command"][result["command"].index("--language") + 1] == "yue"
+    assert result["command"][result["command"].index("--context") + 1] == "重疾险 免赔额"
     assert result["available"] is True
 
 

@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 import math
+import os
+import shutil
+import subprocess
+import uuid
 from collections import defaultdict
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +14,8 @@ from .asr_local_agreement import measure_local_agreement
 from .canonical_json import canonical_json_sha256
 from .file_hash import sha256_file
 from .models import now_iso
+from .media_tools import local_tool_subprocess_env
+from .asr_runner import _resolve_python_executable
 from .storage import read_json, write_json
 
 
@@ -35,6 +42,8 @@ def align_chunk_speaker_records(
     similarity_threshold: float = DEFAULT_SIMILARITY_THRESHOLD,
     overlap_agreement_threshold: float = DEFAULT_OVERLAP_AGREEMENT_THRESHOLD,
     max_speakers: int = 15,
+    expected_speaker_count: int | None = None,
+    oracle_clusterer: Callable[[list[list[float]], int], list[int]] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any]]:
     """Map chunk-local CAM++ clusters to recording-global anonymous IDs.
 
@@ -59,6 +68,12 @@ def align_chunk_speaker_records(
     )
     if int(max_speakers) < 1:
         raise ValueError("max_speakers must be positive")
+    if expected_speaker_count is not None:
+        expected_speaker_count = int(expected_speaker_count)
+        if expected_speaker_count < 1:
+            raise ValueError("expected_speaker_count must be positive")
+        if expected_speaker_count > int(max_speakers):
+            raise ValueError("expected_speaker_count exceeds max_speakers")
 
     values = [_deepcopy_json(row) for row in records if isinstance(row, dict)]
     chunks = _chunk_centers(values)
@@ -71,6 +86,24 @@ def align_chunk_speaker_records(
     mapping: dict[tuple[int, str], str] = {}
     mappings: list[dict[str, Any]] = []
     missing_center_chunks: list[int] = []
+
+    # Intent: let an operator-confirmed participant count repair CAM++
+    # over-splitting, including two local labels inside the same ASR chunk.
+    # Decision: reuse FunASR 1.3.30's SpectralCluster oracle-count path and
+    # canonicalise only its anonymous label numbering; never infer a role.
+    # Reason: the upstream streaming mapper intentionally prevents two active
+    # local clusters sharing one ID, which is correct online but cannot repair
+    # within-chunk over-segmentation after the recording is complete.
+    # Evidence: pinned ``ClusterBackend.forward`` accepts ``oracle_num`` and
+    # delegates to ``SpectralCluster``; the user confirmed three participants.
+    # Effective scope: derived candidate ``speaker_global_id`` fields and the
+    # local-private centroid sidecar only. Transcript text and identities stay
+    # unchanged and require human confirmation before promotion.
+    oracle_assignments = _oracle_assignments(
+        chunks,
+        expected_speaker_count,
+        clusterer=oracle_clusterer,
+    )
 
     chunk_indexes = sorted({_chunk_index(row) for row in values})
     for chunk_index in chunk_indexes:
@@ -88,7 +121,15 @@ def align_chunk_speaker_records(
             best_similarity = float("-inf")
             method = "funasr_cosine_center"
 
-            if anchor is not None:
+            if oracle_assignments is not None:
+                best_id = oracle_assignments[(chunk_index, local_id)]
+                method = "funasr_spectral_oracle_count"
+                if best_id < len(global_centers):
+                    best_similarity = _dot(center, global_centers[best_id])
+                else:
+                    best_similarity = 1.0
+
+            if best_id is None and anchor is not None:
                 anchored_global = mapping.get(
                     (int(anchor["previous_chunk_index"]), str(anchor["previous_local_speaker_id"]))
                 )
@@ -115,7 +156,14 @@ def align_chunk_speaker_records(
                         break
 
             created = False
-            if best_id is None or best_similarity < threshold:
+            if oracle_assignments is not None:
+                if best_id == len(global_centers):
+                    global_centers.append(center)
+                    global_updates.append(1)
+                    created = True
+                elif best_id is None or best_id > len(global_centers):
+                    raise RuntimeError("oracle speaker labels are not canonical")
+            elif best_id is None or best_similarity < threshold:
                 if len(global_centers) < int(max_speakers):
                     best_id = len(global_centers)
                     global_centers.append(center)
@@ -150,7 +198,8 @@ def align_chunk_speaker_records(
 
             global_id = f"speaker-global-{best_id + 1:03d}"
             mapping[(chunk_index, local_id)] = global_id
-            used_ids.add(best_id)
+            if oracle_assignments is None:
+                used_ids.add(best_id)
             mappings.append(
                 {
                     "chunk_index": chunk_index,
@@ -214,6 +263,7 @@ def align_chunk_speaker_records(
         "chunk_count": len(chunk_indexes),
         "chunk_local_speaker_count": local_speaker_count,
         "global_speaker_count": len(global_centers),
+        "expected_speaker_count": expected_speaker_count,
         "speaker_sentence_count": speaker_sentence_count,
         "mapped_sentence_count": mapped_sentence_count,
         "missing_center_chunk_indexes": sorted(set(missing_center_chunks)),
@@ -224,6 +274,7 @@ def align_chunk_speaker_records(
             "commit": UPSTREAM_COMMIT,
             "entrypoint": UPSTREAM_ENTRYPOINT,
             "reuse_mode": "independent_thin_adaptation_of_tested_mapping_contract",
+            "oracle_count_entrypoint": "funasr.models.campplus.cluster_backend.SpectralCluster",
         },
         "overlap_reference": {
             "module": "video_knowledge_pipeline.asr_local_agreement",
@@ -293,6 +344,7 @@ def build_speaker_global_alignment(
     similarity_threshold: float = DEFAULT_SIMILARITY_THRESHOLD,
     overlap_agreement_threshold: float = DEFAULT_OVERLAP_AGREEMENT_THRESHOLD,
     max_speakers: int = 15,
+    expected_speaker_count: int | None = None,
     write: bool = True,
 ) -> dict[str, Any]:
     source = Path(chunked_output_path).expanduser().resolve()
@@ -307,10 +359,132 @@ def build_speaker_global_alignment(
         similarity_threshold=similarity_threshold,
         overlap_agreement_threshold=overlap_agreement_threshold,
         max_speakers=max_speakers,
+        expected_speaker_count=expected_speaker_count,
     )
     artifact = write_alignment_artifacts(source, public, private, write=write)
     artifact["mapped_chunk_results"] = _public_records(mapped)
     return artifact
+
+
+def _oracle_assignments(
+    chunks: dict[int, list[dict[str, Any]]],
+    expected_speaker_count: int | None,
+    *,
+    clusterer: Callable[[list[list[float]], int], list[int]] | None,
+) -> dict[tuple[int, str], int] | None:
+    if expected_speaker_count is None:
+        return None
+    ordered = [
+        (chunk_index, str(row["local_speaker_id"]), _normalise_vector(row["center"]))
+        for chunk_index in sorted(chunks)
+        for row in sorted(
+            chunks[chunk_index], key=lambda value: str(value["local_speaker_id"])
+        )
+    ]
+    if expected_speaker_count > len(ordered):
+        raise ValueError("expected_speaker_count exceeds available speaker centers")
+    runner = clusterer or _funasr_spectral_oracle_labels
+    labels = [int(value) for value in runner([row[2] for row in ordered], expected_speaker_count)]
+    if len(labels) != len(ordered):
+        raise RuntimeError("FunASR oracle cluster label count mismatch")
+    unique = sorted(set(labels), key=lambda label: labels.index(label))
+    if len(unique) != expected_speaker_count:
+        raise RuntimeError("FunASR oracle clustering did not produce expected speaker count")
+    canonical = {label: index for index, label in enumerate(unique)}
+    return {
+        (chunk_index, local_id): canonical[label]
+        for (chunk_index, local_id, _center), label in zip(ordered, labels, strict=True)
+    }
+
+
+def _funasr_spectral_oracle_labels(
+    centers: list[list[float]], expected_speaker_count: int
+) -> list[int]:
+    """Call the pinned FunASR spectral implementation without a new clusterer."""
+
+    try:
+        from .campplus_oracle_cluster_runner import cluster_campplus_centers
+
+        return cluster_campplus_centers(centers, expected_speaker_count)
+    except ModuleNotFoundError:
+        return _funasr_spectral_oracle_labels_isolated(
+            centers, expected_speaker_count
+        )
+
+
+def _funasr_spectral_oracle_labels_isolated(
+    centers: list[list[float]], expected_speaker_count: int
+) -> list[int]:
+    """Reuse the existing isolated FunASR runtime, not a second install."""
+
+    python = Path(_resolve_python_executable()).expanduser()
+    if not python.is_file():
+        raise RuntimeError("funasr_cluster_backend_unavailable")
+    root = Path(__file__).resolve().parents[2]
+    env = local_tool_subprocess_env()
+    existing = str(env.get("PYTHONPATH") or "")
+    env["PYTHONPATH"] = str(root / "src") + (os.pathsep + existing if existing else "")
+    configured_root = str(os.environ.get("VKP_PRIVATE_RUNTIME_DIR") or "").strip()
+    candidates = [Path(configured_root).expanduser()] if configured_root else []
+    candidates.extend(
+        [
+            root / ".local" / "private-runtime",
+            root.parent / "outputs" / "vkp-private-runtime",
+        ]
+    )
+    runtime_root: Path | None = None
+    for candidate in candidates:
+        try:
+            candidate.mkdir(parents=True, exist_ok=True)
+            runtime_root = candidate.resolve()
+            break
+        except OSError:
+            continue
+    if runtime_root is None:
+        raise RuntimeError("no writable local-private runtime directory")
+    temporary = runtime_root / f"campplus-oracle-{uuid.uuid4().hex}"
+    temporary.mkdir(parents=True, exist_ok=False)
+    try:
+        request = temporary / "request.private.json"
+        output = temporary / "result.private.json"
+        write_json(
+            request,
+            {
+                "schema": "video_knowledge_pipeline.campplus_oracle_cluster_private.v1",
+                "biometric_data": True,
+                "expected_speaker_count": expected_speaker_count,
+                "centers": centers,
+            },
+        )
+        completed = subprocess.run(
+            [
+                str(python.resolve()),
+                "-m",
+                "video_knowledge_pipeline.campplus_oracle_cluster_runner",
+                "--request",
+                str(request),
+                "--output",
+                str(output),
+            ],
+            capture_output=True,
+            check=False,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=120,
+            env=env,
+        )
+        if completed.returncode != 0 or not output.is_file():
+            raise RuntimeError(
+                "funasr oracle clustering failed: "
+                + (completed.stderr or completed.stdout or "no output")[-2000:]
+            )
+        payload = read_json(output)
+        if not isinstance(payload, dict) or payload.get("status") != "completed":
+            raise RuntimeError("funasr oracle clustering returned invalid output")
+        return [int(value) for value in payload.get("labels") or []]
+    finally:
+        shutil.rmtree(temporary, ignore_errors=True)
 
 
 def enroll_local_voiceprints(

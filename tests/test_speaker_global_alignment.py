@@ -7,6 +7,10 @@ from pathlib import Path
 import pytest
 
 from video_knowledge_pipeline import funasr_python_runner
+from video_knowledge_pipeline.campplus_speaker_center_sidecar import (
+    CANDIDATE_SCHEMA,
+    build_campplus_speaker_center_sidecar,
+)
 from video_knowledge_pipeline.speaker_global_alignment import (
     PRIVATE_ALIGNMENT_SCHEMA,
     align_chunk_speaker_records,
@@ -17,6 +21,9 @@ from video_knowledge_pipeline.speaker_global_alignment import (
     write_alignment_artifacts,
 )
 from video_knowledge_pipeline.transcript_speakers import cue_speaker
+from video_knowledge_pipeline.speaker_shared_session_alignment import (
+    build_shared_session_speaker_alignment,
+)
 
 
 def _records() -> list[dict[str, object]]:
@@ -89,6 +96,47 @@ def test_two_active_clusters_cannot_collapse_to_one_global_id() -> None:
 
     assert len(global_ids) == 2
     assert public["global_speaker_count"] >= 2
+
+
+def test_operator_known_count_reuses_funasr_oracle_and_repairs_within_chunk_split() -> None:
+    records = [
+        {
+            "chunk_index": 0,
+            "record_index": 0,
+            "_speaker_embedding_centers": [
+                {"local_speaker_id": str(index), "center": center}
+                for index, center in enumerate(
+                    ([1.0, 0.0], [0.0, 1.0], [0.99, 0.01], [-1.0, 0.0], [0.01, 0.99])
+                )
+            ],
+            "sentence_info": [
+                {"start": index * 1000, "end": (index + 1) * 1000, "text": str(index), "spk": index}
+                for index in range(5)
+            ],
+        }
+    ]
+
+    mapped, public, private = align_chunk_speaker_records(
+        records,
+        expected_speaker_count=3,
+        oracle_clusterer=lambda _centers, expected: [7, 4, 7, 9, 4]
+        if expected == 3
+        else [],
+    )
+
+    assert public["expected_speaker_count"] == 3
+    assert public["global_speaker_count"] == 3
+    assert [row["speaker_global_id"] for row in mapped[0]["sentence_info"]] == [
+        "speaker-global-001",
+        "speaker-global-002",
+        "speaker-global-001",
+        "speaker-global-003",
+        "speaker-global-002",
+    ]
+    assert len(private["global_centers"]) == 3
+    assert {row["method"] for row in public["mappings"]} == {
+        "funasr_spectral_oracle_count"
+    }
 
 
 def test_missing_centers_fail_closed_without_relabeling() -> None:
@@ -278,3 +326,253 @@ def test_funasr_runner_requests_and_serializes_only_speaker_centers(
         {"local_speaker_id": "1", "center": [0.0, 1.0]},
     ]
     assert payload["speaker_embedding_evidence"]["biometric_data"] is True
+
+
+def test_campplus_center_sidecar_is_candidate_only_and_does_not_rerun_asr(
+    tmp_path: Path,
+) -> None:
+    media = tmp_path / "interview.mp4"
+    source = tmp_path / "raw-asr-output.json"
+    output = tmp_path / "speaker-sidecar"
+    media.write_bytes(b"synthetic-media")
+    original = {
+        "schema": "video_knowledge_pipeline.funasr_chunked_raw_output.v1",
+        "input": str(media),
+        "duration_seconds": 20.0,
+        "provider": "sensevoice",
+        "chunk_results": [
+            {
+                "chunk_index": 0,
+                "record_index": 0,
+                "sentence_info": [
+                    {
+                        "start": index * 3000,
+                        "end": index * 3000 + 2000,
+                        "text": f"segment-{index}",
+                        "spk": index,
+                    }
+                    for index in range(5)
+                ],
+            }
+        ],
+    }
+    source.write_text(json.dumps(original, ensure_ascii=False), encoding="utf-8")
+
+    def fake_clip(
+        _media: Path, destination: Path, windows: list[dict[str, object]]
+    ) -> dict[str, object]:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(f"clip-{windows[0]['start']}".encode())
+        return {"tool": "fake-ffmpeg", "window_count": len(windows)}
+
+    vectors = [
+        [1.0, 0.0],
+        [0.0, 1.0],
+        [0.99, 0.01],
+        [-1.0, 0.0],
+        [0.01, 0.99],
+    ]
+    result = build_campplus_speaker_center_sidecar(
+        source,
+        media,
+        output,
+        expected_speaker_count=3,
+        execute=True,
+        clip_builder=fake_clip,
+        embedding_extractor=lambda clips, device: (
+            vectors,
+            {"provider": "fake-campplus", "device": device, "clip_count": len(clips)},
+        ),
+        oracle_clusterer=lambda _centers, _expected: [0, 1, 0, 2, 1],
+    )
+    candidate = json.loads(
+        Path(result["artifacts"]["candidate_transcript"]).read_text(encoding="utf-8")
+    )
+    public = Path(result["artifacts"]["public_sidecar"]).read_text(encoding="utf-8")
+
+    assert result["status"] == "needs_human_review"
+    assert result["operator_boundary"]["asr_reexecuted"] is False
+    assert result["alignment"]["global_speaker_count"] == 3
+    assert candidate["schema"] == CANDIDATE_SCHEMA
+    assert candidate["candidate_only"] is True
+    assert len(
+        {
+            row["speaker_global_id"]
+            for row in candidate["chunk_results"][0]["sentence_info"]
+        }
+    ) == 3
+    assert "\"center\"" not in public
+    assert json.loads(source.read_text(encoding="utf-8")) == original
+
+
+def test_shared_session_alignment_requires_confirmation_and_keeps_roles_unconfirmed(
+    tmp_path: Path,
+) -> None:
+    centers: list[Path] = []
+    candidates: list[Path] = []
+    for recording_index in range(2):
+        center_path = tmp_path / f"centers-{recording_index}.private.json"
+        candidate_path = tmp_path / f"candidate-{recording_index}.json"
+        center_path.write_text(
+            json.dumps(
+                {
+                    "biometric_data": True,
+                    "centers": [
+                        {
+                            "chunk_index": 0,
+                            "local_speaker_id": str(index),
+                            "center": [1.0, float(index + recording_index + 1)],
+                        }
+                        for index in range(3)
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        candidate_path.write_text(
+            json.dumps(
+                {
+                    "schema": "candidate",
+                    "chunk_results": [
+                        {
+                            "chunk_index": 0,
+                            "sentence_info": [
+                                {
+                                    "start": index * 1000,
+                                    "end": index * 1000 + 900,
+                                    "text": f"recording-{recording_index}-speaker-{index}",
+                                    "spk": index,
+                                    "speaker_local_cluster": str(index),
+                                    "speaker_global_id": f"recording-local-{index}",
+                                }
+                                for index in range(3)
+                            ],
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        centers.append(center_path)
+        candidates.append(candidate_path)
+
+    blocked = build_shared_session_speaker_alignment(
+        centers,
+        candidates,
+        tmp_path / "blocked",
+        expected_speaker_count=3,
+        confirm_shared_participant_set=False,
+    )
+    result = build_shared_session_speaker_alignment(
+        centers,
+        candidates,
+        tmp_path / "shared",
+        expected_speaker_count=3,
+        confirm_shared_participant_set=True,
+        oracle_clusterer=lambda _centers, _expected: [9, 5, 7, 9, 5, 7],
+    )
+    first = json.loads(
+        Path(result["candidate_transcripts"][0]["path"]).read_text(encoding="utf-8")
+    )
+    second = json.loads(
+        Path(result["candidate_transcripts"][1]["path"]).read_text(encoding="utf-8")
+    )
+    review = json.loads(Path(result["role_review_path"]).read_text(encoding="utf-8"))
+
+    assert blocked["status"] == "blocked"
+    assert result["global_speaker_count"] == 3
+    assert [
+        row["speaker_global_id"] for row in first["chunk_results"][0]["sentence_info"]
+    ] == [
+        row["speaker_global_id"] for row in second["chunk_results"][0]["sentence_info"]
+    ]
+    assert all(
+        row["recording_local_speaker_global_id"].startswith("recording-local-")
+        for row in first["chunk_results"][0]["sentence_info"]
+    )
+    assert {row["role_status"] for row in review["assignments"]} == {"unconfirmed"}
+    assert '"center"' not in json.dumps(result)
+
+
+def test_shared_session_alignment_uses_per_segment_samples_and_marks_impure_local_cluster(
+    tmp_path: Path,
+) -> None:
+    centers = tmp_path / "centers.private.json"
+    candidate = tmp_path / "candidate.json"
+    centers.write_text(
+        json.dumps(
+            {
+                "biometric_data": True,
+                "centers": [
+                    {"chunk_index": 0, "local_speaker_id": "0", "center": [1.0, 0.0]}
+                ],
+                "samples": [
+                    {
+                        "chunk_index": 0,
+                        "local_speaker_id": "0",
+                        "source_segment_id": "chunk-0000-sentence-00000",
+                        "duration_seconds": 4.0,
+                        "center": [1.0, 0.0],
+                    },
+                    {
+                        "chunk_index": 0,
+                        "local_speaker_id": "0",
+                        "source_segment_id": "chunk-0000-sentence-00001",
+                        "duration_seconds": 2.0,
+                        "center": [0.0, 1.0],
+                    },
+                    {
+                        "chunk_index": 0,
+                        "local_speaker_id": "1",
+                        "source_segment_id": "chunk-0000-sentence-00002",
+                        "duration_seconds": 5.0,
+                        "center": [-1.0, 0.0],
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    candidate.write_text(
+        json.dumps(
+            {
+                "chunk_results": [
+                    {
+                        "chunk_index": 0,
+                        "sentence_info": [
+                            {"start": 0, "end": 4000, "text": "甲", "spk": 0},
+                            {"start": 4000, "end": 6000, "text": "乙", "spk": 0},
+                            {"start": 6000, "end": 11000, "text": "丙", "spk": 1},
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = build_shared_session_speaker_alignment(
+        [centers],
+        [candidate],
+        tmp_path / "shared-samples",
+        expected_speaker_count=3,
+        confirm_shared_participant_set=True,
+        oracle_clusterer=lambda _vectors, _expected: [3, 7, 9],
+    )
+    derived = json.loads(
+        Path(result["candidate_transcripts"][0]["path"]).read_text(encoding="utf-8")
+    )
+    sentences = derived["chunk_results"][0]["sentence_info"]
+
+    assert result["sample_embedding_count"] == 3
+    assert [row["speaker_global_id"] for row in sentences] == [
+        "speaker-global-001",
+        "speaker-global-002",
+        "speaker-global-003",
+    ]
+    assert all(
+        row["speaker_global_assignment"]["method"]
+        == "exact_source_segment_campplus_sample"
+        for row in sentences
+    )
+    assert result["mappings"][0]["status"] == "needs_human_review"

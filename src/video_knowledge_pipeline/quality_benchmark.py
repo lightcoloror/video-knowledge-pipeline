@@ -35,6 +35,8 @@ def build_quality_benchmark(
     media_paths: list[str | Path] | None = None,
     samples_per_bundle: int = 8,
     sample_seconds: float = 60.0,
+    asr_language: str = "zh",
+    asr_context_hotwords: list[str] | None = None,
     execute_clips: bool = False,
     legacy_reference_manifest: str | Path | None = None,
     write: bool = True,
@@ -42,6 +44,19 @@ def build_quality_benchmark(
     """Create a stratified human-reference benchmark template from bundles."""
 
     out = Path(output_dir).expanduser().resolve()
+    # Intent: make domain-context A/B runs reproducible without teaching the
+    # candidate the expected transcript. Decision: persist only an explicit,
+    # deduplicated vocabulary list in every sample. Reason: Qwen3-ASR supports
+    # context natively while SenseVoice remains the unchanged fast baseline.
+    # Evidence: qwen3_asr_python_runner maps the plan hotword field to the
+    # upstream context argument. Effective scope: local benchmark candidates.
+    context_hotwords = list(
+        dict.fromkeys(
+            str(value).strip()
+            for value in (asr_context_hotwords or [])
+            if str(value).strip()
+        )
+    )
     samples: list[dict[str, Any]] = []
     legacy_references = _legacy_reference_rows(legacy_reference_manifest)
     explicit_media = list(media_paths or [])
@@ -127,6 +142,8 @@ def build_quality_benchmark(
                     "media_path": str(media or ""),
                     "audio_clip_path": str(clip_path.resolve()) if clip_path.exists() else "",
                     "audio_clip_error": clip_error,
+                    "asr_language": str(asr_language or "zh").strip(),
+                    "context_hotwords": context_hotwords,
                     "vad_artifact_path": vad_artifact,
                     "source_transcript": str(baseline_source),
                     "reference_transcript": "",
@@ -166,6 +183,8 @@ def build_quality_benchmark(
         "legacy_reference_count": sum(1 for row in samples if row.get("legacy_reference_text")),
         "window_strategy": ALIGNED_WINDOW_STRATEGY,
         "nominal_sample_seconds": float(sample_seconds),
+        "asr_language": str(asr_language or "zh").strip(),
+        "context_hotwords": context_hotwords,
         "window_alignment_ready": bool(samples) and all(bool((row.get("boundary_alignment") or {}).get("ready")) for row in samples),
         "candidate_variant": "qwen3_asr_1_7b",
         "reference_role": "human_evaluation_only_never_correction_evidence",
@@ -227,8 +246,21 @@ def run_quality_benchmark(manifest_json: str | Path, *, output_dir: str | Path |
             variant_metrics[str(key)] = metrics
             if reference_completeness["ready"] and candidate_text:
                 variant_rows.setdefault(str(key), []).append(metrics)
+        # Intent: make the local challenger comparison useful when a benchmark
+        # was seeded from an already completed production SenseVoice run.
+        # Decision: prefer an independently executed SenseVoice variant, then
+        # fall back to the source-bound ``asr_draft_text`` stored in the sample.
+        # Reason: the Cantonese detail pack deliberately avoided rerunning the
+        # same SenseVoice audio, but the previous implementation consequently
+        # reported ``compared_count=0`` even though both hypotheses existed.
+        # Evidence: quality_benchmark.build records ``asr_draft_source`` and
+        # ``asr_draft_text`` from the current aligned window; the review UI
+        # already treats that draft as candidate evidence rather than truth.
+        # Effective scope: evaluation-only disagreement priority and review UI;
+        # no transcript promotion, correction, fallback, or model call.
+        baseline_asr_text = _baseline_asr_text(variant_texts, sample)
         disagreement = _asr_disagreement(
-            variant_texts.get("sensevoice_full_punc") or variant_texts.get("sensevoice_raw") or "",
+            baseline_asr_text,
             variant_texts.get("qwen3_asr_1_7b") or "",
         )
         sample["asr_disagreement"] = disagreement
@@ -451,6 +483,19 @@ def _asr_disagreement(sensevoice_text: str, qwen_text: str) -> dict[str, Any]:
         "sensevoice_chars": len(sensevoice),
         "qwen_chars": len(qwen),
     }
+
+
+def _baseline_asr_text(
+    variant_texts: dict[str, str], sample: dict[str, Any]
+) -> str:
+    """Select independent SenseVoice output or the source-bound ASR draft."""
+
+    return str(
+        variant_texts.get("sensevoice_full_punc")
+        or variant_texts.get("sensevoice_raw")
+        or sample.get("asr_draft_text")
+        or ""
+    )
 
 def _metrics(
     *,
@@ -1276,6 +1321,41 @@ def _render_report(result: dict[str, Any]) -> str:
             lines.append(
                 f"- {blocker.get('key')} current={blocker.get('current')} required={blocker.get('required')} "
                 f"next={blocker.get('next_action')}"
+            )
+    # Intent: keep useful challenger evidence visible even before a human CER
+    # reference exists. Decision: render model-to-model disagreement as review
+    # triage, never as a winner score. Reason: pure Cantonese detail errors are
+    # concentrated in a few windows and numbers; a blank Variants table hid
+    # those actionable windows. Evidence: the 2026-08-11 interview pack had
+    # 12/12 candidate outputs but 0/12 human references. Effective scope: local
+    # Markdown report only; acceptance and transcript promotion remain blocked.
+    disagreement = result.get("asr_disagreement_summary") or {}
+    if int(disagreement.get("compared_count") or 0) > 0:
+        lines.extend(
+            [
+                "",
+                "## ASR Disagreement Triage",
+                "",
+                f"- Compared samples: {disagreement.get('compared_count')}",
+                f"- Mean normalized edit ratio: {_fmt(disagreement.get('mean_edit_ratio'))}",
+                f"- High-disagreement samples: {disagreement.get('high_disagreement_count')}",
+                f"- Samples with number conflicts: {disagreement.get('number_conflict_count')}",
+                "- This is review priority, not accuracy or a model-switch decision.",
+                "",
+                "| Sample | Time | Priority | Edit ratio | Number conflicts |",
+                "| --- | --- | --- | ---: | --- |",
+            ]
+        )
+        for row in result.get("samples") or []:
+            item = row.get("asr_disagreement") or {}
+            if not item.get("available"):
+                continue
+            window = row.get("window") or {}
+            conflicts = "、".join(str(value) for value in item.get("number_conflicts") or []) or "—"
+            lines.append(
+                f"| {row.get('sample_id')} | {format_timestamp(float(window.get('start') or 0))} - "
+                f"{format_timestamp(float(window.get('end') or 0))} | {item.get('review_priority')} | "
+                f"{_fmt(item.get('edit_ratio'))} | {conflicts} |"
             )
     lines.extend(
         [

@@ -4,7 +4,8 @@ import json
 from pathlib import Path
 
 from video_knowledge_pipeline.asr_adapter import read_asr_cues, read_asr_segment_dicts
-from video_knowledge_pipeline.qwen3_asr_python_runner import _torch_dtype
+from video_knowledge_pipeline.asr_runner import _model_ready
+from video_knowledge_pipeline.qwen3_asr_python_runner import _language, _torch_dtype
 
 
 def test_qwen3_asr_raw_output_is_detected_and_normalized(tmp_path: Path) -> None:
@@ -44,6 +45,45 @@ def test_qwen3_asr_explicit_cpu_bfloat16_dtype() -> None:
     assert _torch_dtype("bfloat16", "cpu", TorchStub) == "bfloat16"
     assert _torch_dtype("auto", "cpu", TorchStub) == "float32"
     assert _torch_dtype("auto", "cuda", TorchStub) == "bfloat16"
+
+
+def test_qwen3_asr_maps_vkp_yue_alias_to_canonical_cantonese() -> None:
+    assert _language("yue") == "Cantonese"
+    assert _language("zh-yue") == "Cantonese"
+    assert _language("Cantonese") == "Cantonese"
+
+
+def test_qwen3_asr_readiness_rejects_index_without_weight_shards(tmp_path: Path) -> None:
+    snapshot = tmp_path / "incomplete"
+    snapshot.mkdir()
+    (snapshot / "config.json").write_text("{}", encoding="utf-8")
+    (snapshot / "model.safetensors.index.json").write_text(
+        json.dumps({"weight_map": {"encoder": "model-00001-of-00002.safetensors"}}),
+        encoding="utf-8",
+    )
+
+    result = _model_ready(preset="qwen3-asr-1.7b", model=str(snapshot))
+
+    assert result["ready"] is False
+    assert result["status"] == "incomplete_cache"
+    assert result["incomplete_cache_matches"][0]["status"] == "incomplete_weight_shards"
+
+
+def test_qwen3_asr_readiness_accepts_complete_indexed_snapshot(tmp_path: Path) -> None:
+    snapshot = tmp_path / "complete"
+    snapshot.mkdir()
+    (snapshot / "config.json").write_text("{}", encoding="utf-8")
+    shard = snapshot / "model-00001-of-00001.safetensors"
+    shard.write_bytes(b"offline-fixture-weight")
+    (snapshot / "model.safetensors.index.json").write_text(
+        json.dumps({"weight_map": {"encoder": shard.name}}),
+        encoding="utf-8",
+    )
+
+    result = _model_ready(preset="qwen3-asr-1.7b", model=str(snapshot))
+
+    assert result["ready"] is True
+    assert result["cache_matches"] == [str(snapshot.resolve())]
 
 
 def test_qwen3_chunk_results_use_forced_alignment_timestamps(tmp_path: Path) -> None:

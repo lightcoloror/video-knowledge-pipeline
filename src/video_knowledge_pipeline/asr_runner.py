@@ -413,6 +413,19 @@ def _command_for_preset(
             command_parts.extend(["--forced-aligner", _local_qwen_aligner_path() or "Qwen/Qwen3-ForcedAligner-0.6B"])
         else:
             command_parts.append("--no-timestamps")
+        # Intent: reuse Qwen3-ASR's official context channel for reviewed
+        # domain terms rather than inventing a provider-specific prompt layer.
+        # Decision: map VKP's existing evidence-derived ``hotword`` argument to
+        # Qwen's ``--context`` only for the Qwen presets.
+        # Reason: the same plan contract already prevents evaluation references
+        # from becoming correction evidence, while Qwen has no FunASR-style
+        # hotword flag.
+        # Evidence: qwen-asr 0.0.6 ``Qwen3ASRModel.transcribe`` accepts context
+        # and language together.
+        # Effective scope: local Qwen candidate inference; no cloud call,
+        # fallback, canonical transcript mutation, or reference import.
+        if str(hotword or "").strip():
+            command_parts.extend(["--context", str(hotword).strip()])
         return command_parts
     if use_python_runner and preset == "faster-whisper":
         return [
@@ -842,6 +855,8 @@ def _model_ready(*, preset: str, model: str) -> dict[str, Any]:
     model_id = model or ("iic/SenseVoiceSmall" if preset == "sensevoice" else "paraformer-zh")
     if preset == "moss-transcribe-diarize":
         return _moss_model_ready(model_id)
+    if preset in {"qwen3-asr-0.6b", "qwen3-asr-1.7b", "qwen3-forced-aligner"}:
+        return _qwen_model_ready(model_id)
     direct_path = Path(model_id).expanduser()
     if direct_path.exists():
         resolved = str(direct_path.resolve())
@@ -878,6 +893,134 @@ def _model_ready(*, preset: str, model: str) -> dict[str, Any]:
         "ready": bool(matches),
         "cache_matches": matches,
         "status": "ready" if matches else "unknown_or_not_downloaded",
+    }
+
+
+def _qwen_model_ready(model_id: str) -> dict[str, Any]:
+    """Validate an offline Qwen ASR snapshot instead of trusting a cache shell.
+
+    Intent: prevent an interrupted Hub directory from being reported as a ready
+    local model. Decision: reuse VKP's indexed-weight validation contract used
+    by the MOSS adapter and require config plus every referenced shard. Reason:
+    Hugging Face creates the repo/snapshot directory before large weights finish.
+    Evidence: the 2026-08-11 Cantonese smoke found only config/index and two
+    ``.incomplete`` blobs while the old directory-existence probe returned ready.
+    Effective scope: Qwen3-ASR/ForcedAligner readiness and offline source choice;
+    no network access, download, fallback, or transcript promotion is added.
+    """
+
+    candidates: set[Path] = set()
+    direct_path = Path(model_id).expanduser()
+    if direct_path.exists():
+        candidates.update(_expand_huggingface_snapshot_path(direct_path))
+    model_name = model_id.split("/")[-1]
+    roots = _unique_paths(
+        [
+            Path(os.environ["HF_HUB_CACHE"]).expanduser()
+            if os.environ.get("HF_HUB_CACHE")
+            else None,
+            Path(os.environ["HF_HOME"]).expanduser() / "hub"
+            if os.environ.get("HF_HOME")
+            else None,
+            Path.home() / ".cache" / "huggingface" / "hub",
+            Path(os.environ["MODELSCOPE_CACHE"]).expanduser()
+            if os.environ.get("MODELSCOPE_CACHE")
+            else None,
+            Path.home() / ".cache" / "modelscope",
+            local_model_root().expanduser(),
+        ]
+    )
+    for root in roots:
+        if not root.exists():
+            continue
+        for candidate in (
+            root / model_id,
+            root / model_name,
+            root / "hub" / "models" / model_id,
+            root / "models" / model_id,
+            root / f"models--{model_id.replace('/', '--')}",
+        ):
+            if candidate.exists():
+                candidates.update(_expand_huggingface_snapshot_path(candidate))
+
+    snapshots = [
+        _qwen_snapshot_content_status(path)
+        for path in sorted(candidates, key=lambda value: str(value).lower())
+    ]
+    ready_paths = [row["path"] for row in snapshots if row["ready"]]
+    incomplete = [row for row in snapshots if not row["ready"]]
+    return {
+        "model": model_id,
+        "ready": bool(ready_paths),
+        "cache_matches": ready_paths,
+        "incomplete_cache_matches": incomplete,
+        "status": (
+            "ready"
+            if ready_paths
+            else "incomplete_cache"
+            if incomplete
+            else "unknown_or_not_downloaded"
+        ),
+        "network_access": "disabled",
+    }
+
+
+def _qwen_snapshot_content_status(path: Path) -> dict[str, Any]:
+    resolved = path.resolve()
+    missing_files = [name for name in ("config.json",) if not (resolved / name).is_file()]
+    single_weight = next(
+        (
+            name
+            for name in _MOSS_SINGLE_WEIGHT_FILES
+            if _usable_model_weight(resolved / name)
+        ),
+        "",
+    )
+    indexed_weight = ""
+    missing_weight_shards: list[str] = []
+    invalid_weight_indexes: list[str] = []
+    if not single_weight:
+        for name in _MOSS_WEIGHT_INDEX_FILES:
+            index_path = resolved / name
+            if not index_path.is_file():
+                continue
+            try:
+                payload = json.loads(index_path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                invalid_weight_indexes.append(name)
+                continue
+            weight_map = payload.get("weight_map") if isinstance(payload, dict) else None
+            shard_names = sorted(
+                {str(value) for value in (weight_map or {}).values() if str(value).strip()}
+            )
+            if not shard_names:
+                invalid_weight_indexes.append(name)
+                continue
+            missing = [shard for shard in shard_names if not _usable_model_weight(resolved / shard)]
+            if missing:
+                missing_weight_shards.extend(missing)
+                continue
+            indexed_weight = name
+            break
+    ready = not missing_files and bool(single_weight or indexed_weight)
+    return {
+        "path": str(resolved),
+        "ready": ready,
+        "status": (
+            "ready"
+            if ready
+            else "missing_required_snapshot_files"
+            if missing_files
+            else "incomplete_weight_shards"
+            if missing_weight_shards
+            else "invalid_weight_index"
+            if invalid_weight_indexes
+            else "missing_model_weights"
+        ),
+        "missing_files": missing_files,
+        "weight_artifact": single_weight or indexed_weight,
+        "missing_weight_shards": sorted(set(missing_weight_shards)),
+        "invalid_weight_indexes": sorted(set(invalid_weight_indexes)),
     }
 
 

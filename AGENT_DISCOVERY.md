@@ -1210,6 +1210,17 @@ The receipt commands consume completed local execution evidence; they never star
 - Commands: `python -m video_knowledge_pipeline.cli speaker-global-align <chunked-output.json>` and `python -m video_knowledge_pipeline.cli speaker-voiceprint --help`.
 - Detailed record: `docs/speaker-global-alignment-and-cross-video-voiceprint-2026-08-10.md`.
 
+## 2026-08-11 Cantonese detail route and utterance-level shared speakers
+
+- Updated: 2026-08-11 05:03:30 +08:00 by Codex (GPT-5.6 Sol).
+- Intent: improve pure-Cantonese detail recognition and keep the same three anonymous participants stable across adjacent interview recordings.
+- Decision: reuse the official Qwen3-ASR `Cantonese` + `context` contract for a 12-clip candidate benchmark, and reuse pinned FunASR 1.3.30 CAM++ plus `SpectralCluster` over per-source-segment embeddings. No ASR or speaker model is reimplemented.
+- Reason: the existing SenseVoice transcript preserves the broad meaning but misses details; local CAM++ labels also over-split three people into 5/22 chunk-local clusters. A directory-only Qwen cache check and one concatenated center per local cluster hid two different quality failures.
+- Evidence: Qwen readiness rejects the incomplete Hub shell and accepts the complete local ModelScope snapshot only after all indexed shards exist. Local RTX 5070 Ti execution completed 12/12 Qwen Cantonese clips with context, zero fallback and network disabled. SenseVoice/Qwen comparison now covers 12/12 windows: mean edit ratio `0.194459`, 8 high-disagreement windows and 4 number-conflict windows; human references remain 0/12. CAM++ completed 9 short-recording and 83 long-recording samples, then jointly clustered all 92 samples into three anonymous candidates. Two local groups remain below 0.67 purity and 21 long-recording sentences depend on low-confidence majority assignment, so ASR/model and role promotion are both still blocked.
+- Effective scope: `speaker-center-sidecar`, `speaker-shared-session-align`, Qwen benchmark manifests/reports, source-bound SenseVoice-vs-Qwen disagreement triage, and read-only transcript-source completeness. Raw ASR, canonical transcript, Timeline, translation and Smart Summary are unchanged.
+- Rollback: delete the candidate/private output directories or stop consuming the new per-segment `samples`; existing local-center inputs remain readable.
+- Detailed record: `docs/cantonese-detail-v1-and-shared-speaker-2026-08-11.md`.
+
 ## 2026-08-10 Dual-track subtitle editor
 
 - Updated: 2026-08-10 19:16:59 +08:00 by Codex / GPT-5.6 Sol.

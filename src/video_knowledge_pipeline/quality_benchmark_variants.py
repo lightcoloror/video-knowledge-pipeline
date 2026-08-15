@@ -80,7 +80,15 @@ def execute_quality_benchmark_variants(
             profile = VARIANT_PRESETS[variant]
             kwargs: dict[str, Any] = {
                 "preset": profile["preset"],
-                "language": "zh",
+                # Intent: compare dialect models on the actual source language.
+                # Decision: consume the source-bound sample language written by
+                # quality-benchmark build, retaining zh for legacy manifests.
+                # Reason: forcing Chinese on a pure Cantonese sample invalidates
+                # the Qwen/SenseVoice comparison before model quality is tested.
+                # Evidence: both upstream adapters expose explicit yue/Cantonese
+                # selection and the interview run was already pinned to yue.
+                # Effective scope: local benchmark variants only.
+                "language": str(sample.get("asr_language") or "zh").strip(),
             }
             if "punc_model" in profile:
                 kwargs["punc_model"] = profile["punc_model"]
@@ -90,6 +98,7 @@ def execute_quality_benchmark_variants(
                 kwargs["hotword"] = ""
             if variant in {"qwen3_asr_1_7b", "qwen3_asr_0_6b"}:
                 kwargs["qwen_timestamps"] = False
+                kwargs["hotword"] = _entity_hotword_for_sample(sample)
             try:
                 plan = build_plan(workspace, clip, **kwargs)
                 plan_path = str(plan.get("plan_path") or "")
