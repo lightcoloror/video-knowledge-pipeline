@@ -1221,6 +1221,17 @@ The receipt commands consume completed local execution evidence; they never star
 - Rollback: delete the candidate/private output directories or stop consuming the new per-segment `samples`; existing local-center inputs remain readable.
 - Detailed record: `docs/cantonese-detail-v1-and-shared-speaker-2026-08-11.md`.
 
+## 2026-08-15 Local embedding Gateway candidate
+
+- Updated: 2026-08-15 21:30:35 +08:00 by Codex (GPT-5.6 Sol).
+- Intent: reuse the shared model-provider-gateway Owner execution contract for local embedding candidates without creating a second route, consent or receipt implementation.
+- Decision: pin the optional Gateway dependency to `6575c8089d5f28ae159a0c01cedfa3320db7d7b3` and expose a thin candidate adapter that accepts only synthetic/public input manifests, validates route/gate/receipt lineage, and stores vectors outside the public receipt.
+- Reason: the prior Gateway pin does not contain the Owner capability modules consumed by the adapter; a clone install would otherwise fail at import time.
+- Evidence: deterministic positive and negative fixture coverage validates route, input, output, dimension, timeout and no-fallback constraints. The real local model smoke remains an explicit skip until an isolated runtime and model directory are configured.
+- Effective scope: local embedding candidate evidence only; no online Provider, production index, Timeline, transcript or Smart Summary mutation.
+- Rollback: remove the optional adapter and restore the prior Gateway pin; existing VKP model routing remains available.
+- Detailed record: `docs/embedding-gateway-adapter-2026-08-15.md`.
+
 ## 2026-08-10 Dual-track subtitle editor
 
 - Updated: 2026-08-10 19:16:59 +08:00 by Codex / GPT-5.6 Sol.

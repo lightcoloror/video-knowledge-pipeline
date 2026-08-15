@@ -2035,3 +2035,14 @@ At the time recorded above, every untracked `src/video_knowledge_pipeline/*.py` 
 | YouTube Digest chapters/quotes coverage pattern | 同上 | **quality-gate pattern adapted / implemented** | 意图：避免仅覆盖后半段或时间戳越界的章节/总结误报成熟；决策：章节包检查输入、范围、单调、首尾四分位，最终总结增加 range 与 first/last coverage 门；理由：系统时间事实必须由本地证据判定；证据：正常、tail-only、out-of-range 三类测试通过；生效范围：Smart Summary 本地质量报告；回滚：移除新增检查键即可恢复旧行为。 |
 
 明确拒绝：Supadata、固定 DeepSeek、上游整套浏览器扩展、Chrome 注入、Provider/Key 设置、PR #10 未固定实现、自动在线翻译与静默 local/cloud fallback。没有复制 YouTube Digest 源码；完整五字段记录见 `docs/youtube-digest-selective-adoption-2026-08-12.md`。
+
+## 2026-08-15 粤语细节候选与本地 embedding 统一合同
+
+更新时间：2026-08-15 21:30:35 +08:00 | Codex (GPT-5.6 Sol)
+
+| 上游模块 | 固定版本 | 状态 | 意图 / 决策 / 理由 / 证据 / 生效范围 / 回滚 |
+| --- | --- | --- | --- |
+| Qwen3-ASR | `7c6daf77a2421100f5fb066495372c00129d39ff` / Apache-2.0 | **candidate-only local adapter verified** | 意图：改善纯粤语疑难段、数字及保险/医学术语识别；决策：直接复用上游 `transcribe(..., language="Cantonese", context=...)` 合同和完整分片索引检查，不复制模型推理；理由：SenseVoice 适合快速基线，但采访细节需要独立第二证据源；证据：固定源码接口复核、12/12 本地 GPU 候选成功、零联网/零 fallback，人工真值仍为 0/12；生效范围：候选 benchmark 与差异分诊，不覆盖 canonical transcript；回滚：停用 `qwen3-asr-1.7b` 候选预设或删除本地模型缓存。 |
+| lightcoloror/model-provider-gateway Owner execution | `6575c8089d5f28ae159a0c01cedfa3320db7d7b3` / AGPL-3.0-only | **synthetic-contract verified / real runtime optional** | 意图：让本地 embedding 候选复用共享 manifest、route、gate、receipt 和错误合同；决策：VKP 仅实现薄 adapter，并将 optional extra 固定到实际包含 `owner_execution.py` 与 `capability_control.py` 的提交；理由：旧固定提交 `c5f3ec4...` 不含这些模块，公开 clone 会导入失败；证据：15 项 embedding/quick-health 回归中 14 通过、1 项真实模型 smoke 按未配置条件显式跳过；生效范围：合成/公开文本的本地 embedding 候选，不改变 Timeline、逐字稿、Smart Summary 或生产索引；回滚：恢复旧 optional extra 并删除 embedding adapter，既有 text/vision VKP 网关保持不变。 |
+
+明确拒绝：内嵌或提交向量、模型缓存、真实资料、Key、任意 Provider URL、自动在线 fallback，以及把合成合同通过冒充 Recall@5/10 或真实 runtime 通过。
