@@ -1,5 +1,22 @@
 $ErrorActionPreference = "Stop"
 $root = Resolve-Path (Join-Path $PSScriptRoot "..")
+
+# The registry health probe must not pay the cost of loading or inspecting the
+# ASR/model stack.  Keep this dispatch before environment-file parsing and the
+# remote-destination allowlist; detailed capability diagnostics remain under
+# `asr-env-status`.
+if ($args.Count -gt 0 -and $args[0] -eq "quick-health") {
+    $env:PYTHONPATH = Join-Path $root "src"
+    $env:PYTHONIOENCODING = "utf-8"
+    $quickArgs = @()
+    if ($args.Count -gt 1) {
+        $quickArgs = $args[1..($args.Count - 1)]
+    }
+    python -m video_knowledge_pipeline.quick_health @quickArgs
+    $exitCode = $LASTEXITCODE
+    exit $exitCode
+}
+
 foreach ($envFile in @((Join-Path $root ".local\video-knowledge.env"), (Join-Path $root ".local\vision.env"))) {
     if (Test-Path -LiteralPath $envFile) {
         foreach ($line in Get-Content -LiteralPath $envFile) {

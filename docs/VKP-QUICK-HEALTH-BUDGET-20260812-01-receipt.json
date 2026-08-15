@@ -1,0 +1,69 @@
+{
+  "schema": "codex_dispatch_receipt.v1",
+  "dispatch_id": "VKP-QUICK-HEALTH-BUDGET-20260812-01",
+  "work_id": "WL-20260812-122246-2c6ce7",
+  "goal_status": "complete",
+  "completed_at": "2026-08-12 12:32:18 +08:00",
+  "actor": "Codex (GPT-5.6 Sol)",
+  "baseline": {
+    "command": "scripts\\video-knowledge.ps1 asr-env-status",
+    "elapsed_ms": 19570.38,
+    "exit_code": 0,
+    "classification": "health_budget_mismatch_not_known_function_failure"
+  },
+  "checkpoint": {
+    "command": "scripts\\video-knowledge.ps1 quick-health",
+    "schema": "video_knowledge_pipeline.quick_health.v1",
+    "snapshot_sha256": "c3158d4f0f1bc6b98e0f9eaa428aa5afe3653c22ab4fd76d8841b8beec6bd65d",
+    "timing_ms": [149.3, 92.06, 90.42, 94.83, 100.23],
+    "max_timing_ms": 149.3,
+    "all_ok": true,
+    "heavy_modules_loaded": 0
+  },
+  "modified_files": [
+    "pyproject.toml",
+    "scripts/video-knowledge.ps1",
+    "src/video_knowledge_pipeline/quick_health.py",
+    "src/video_knowledge_pipeline/schemas/quick-health.v1.schema.json",
+    "tests/test_quick_health.py",
+    "docs/VKP-QUICK-HEALTH-BUDGET-20260812-01.md",
+    "docs/video-knowledge-pipeline-quick-health-registry-proposal-20260812.json",
+    "docs/VKP-QUICK-HEALTH-BUDGET-20260812-01-receipt.json"
+  ],
+  "verification": {
+    "quick_health_tests": "6 passed in 0.51s",
+    "quick_and_asr_related_tests": "10 passed in 1.30s; 1 existing jieba/pkg_resources warning",
+    "ruff": "passed with --no-cache",
+    "wheel_build": "passed; module, schema and console entry present",
+    "git_diff_check": "passed; line-ending warning only",
+    "idempotence": "five wrapper runs returned one identical snapshot SHA-256",
+    "resident_process_check": "no new Python process remained after the command exited",
+    "json_and_sensitive_scan": "passed; no secret-like value or personal absolute path match"
+  },
+  "registry_proposal": {
+    "path": "docs/video-knowledge-pipeline-quick-health-registry-proposal-20260812.json",
+    "apply_authorized": false
+  },
+  "change_rationale": {
+    "intent": "Keep VKP's frequent Registry health check inside the 20-second budget without weakening detailed ASR diagnostics.",
+    "decision": "Add a standard-library, fail-closed quick health path before environment, Provider and model setup; preserve asr-env-status as detailed diagnostics.",
+    "reason": "Measured detailed ASR probes consume roughly 19 seconds while static command-surface health completes below 0.15 seconds.",
+    "evidence": "Timing breakdown, six positive/negative tests, four preserved ASR contract tests, Ruff, wheel and five idempotent wrapper runs.",
+    "effective_scope": "VKP local command-surface health and an unapplied Local Tools registry pointer proposal only.",
+    "rollback": "Remove the early dispatch, quick module/schema/tests/entrypoint and restore the old health pointer; no data migration."
+  },
+  "boundary_check": {
+    "tool_registry_modified": false,
+    "service_started": false,
+    "provider_called": false,
+    "model_downloaded_or_loaded": false,
+    "media_read_or_uploaded": false,
+    "business_data_written": false,
+    "push_performed": false
+  },
+  "remaining_risks": [
+    "Quick health does not and must not prove ASR, GPU, cached model or Provider readiness.",
+    "The Local Tools owner must separately approve and apply the registry pointer proposal.",
+    "Detailed asr-env-status remains intentionally slower and should use a diagnostic timeout of about 60 seconds."
+  ]
+}

@@ -38,6 +38,7 @@ dev = [
 
 [project.scripts]
 video-knowledge = "video_knowledge_pipeline.cli:main"
+video-knowledge-quick-health = "video_knowledge_pipeline.quick_health:main"
 video-knowledge-mcp = "video_knowledge_pipeline.mcp_server:main"
 video-knowledge-openclaw-http = "video_knowledge_pipeline.openclaw_http:main"
 video-knowledge-model-gateway = "video_knowledge_pipeline.model_gateway:main"

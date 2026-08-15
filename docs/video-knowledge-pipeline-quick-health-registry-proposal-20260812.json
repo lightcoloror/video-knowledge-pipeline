@@ -1,0 +1,31 @@
+{
+  "schema": "local_tools.registry_health_pointer_proposal.v1",
+  "dispatch_id": "VKP-QUICK-HEALTH-BUDGET-20260812-01",
+  "work_id": "WL-20260812-122246-2c6ce7",
+  "created_at": "2026-08-12 12:32:18 +08:00",
+  "created_by": "Codex (GPT-5.6 Sol)",
+  "apply_authorized": false,
+  "target_tool_id": "video-knowledge-pipeline",
+  "proposed_health_check": {
+    "command": "${VKP_PROJECT_ROOT}\\scripts\\video-knowledge.ps1 quick-health",
+    "working_directory": "${VKP_PROJECT_ROOT}",
+    "kind": "bounded_static_local",
+    "profile": "quick",
+    "timeout_seconds": 20,
+    "expected": "exit 0; JSON schema=video_knowledge_pipeline.quick_health.v1; ok=true; registration.status=registered; runtime.status=ready; callable.status=callable; freshness.status=current"
+  },
+  "preserved_detailed_diagnostic": {
+    "command": "${VKP_PROJECT_ROOT}\\scripts\\video-knowledge.ps1 asr-env-status",
+    "profile": "detailed_asr_diagnostic",
+    "expected": "Detailed JSON may report ASR/model/GPU not ready without implying that the VKP command surface is broken",
+    "recommended_timeout_seconds": 60
+  },
+  "timing_evidence_ms": {
+    "old_wrapper_asr_env_status": 19570.38,
+    "new_quick_health_runs": [149.3, 92.06, 90.42, 94.83, 100.23],
+    "new_quick_health_max": 149.3
+  },
+  "snapshot_sha256": "c3158d4f0f1bc6b98e0f9eaa428aa5afe3653c22ab4fd76d8841b8beec6bd65d",
+  "owner_action": "Review and apply this pointer in tool-registry.json; VKP owner did not mutate the Registry.",
+  "rollback": "Restore the prior asr-env-status health pointer; no VKP data migration is required."
+}
