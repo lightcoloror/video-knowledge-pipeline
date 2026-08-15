@@ -255,7 +255,12 @@ def _qwen3_segment_row(tokens: list[dict[str, Any]]) -> dict[str, Any]:
         ],
     }
 
-def _segments_from_sequence(items: list[dict[str, Any]], *, milliseconds: bool = False) -> list[TranscriptCue]:
+def _segments_from_sequence(
+    items: list[dict[str, Any]],
+    *,
+    milliseconds: bool = False,
+    segment_id_prefix: str = "",
+) -> list[TranscriptCue]:
     cues = []
     for index, item in enumerate(items, start=1):
         text = _clean_asr_text(_first_text(item))
@@ -268,18 +273,31 @@ def _segments_from_sequence(items: list[dict[str, Any]], *, milliseconds: bool =
         # Untimed empty records remain ignorable provider noise.
         if not text and not (end > start):
             continue
-        segment_id = _segment_identity(item, fallback=f"segment-{index:06d}")
+        source_segment_id = _segment_identity(item, fallback=f"segment-{index:06d}")
+        segment_id = (
+            f"{segment_id_prefix}:{source_segment_id}"
+            if segment_id_prefix
+            else source_segment_id
+        )
+        source_segment_ids = [
+            str(value)
+            for value in (item.get("source_segment_ids") or [source_segment_id])
+            if str(value).strip()
+        ]
+        if segment_id_prefix:
+            source_segment_ids = [
+                value
+                if value.startswith(f"{segment_id_prefix}:")
+                else f"{segment_id_prefix}:{value}"
+                for value in source_segment_ids
+            ]
         cues.append(
             TranscriptCue(
                 start=start,
                 end=max(start, end),
                 text=text,
                 segment_id=segment_id,
-                source_segment_ids=[
-                    str(value)
-                    for value in (item.get("source_segment_ids") or [segment_id])
-                    if str(value).strip()
-                ],
+                source_segment_ids=source_segment_ids,
                 transformations=[
                     dict(value)
                     for value in (item.get("transformations") or [])
@@ -303,7 +321,25 @@ def _segments_from_funasr(data: Any) -> list[TranscriptCue]:
             continue
         sentence_info = record.get("sentence_info")
         if isinstance(sentence_info, list):
-            cues.extend(_segments_from_sequence(sentence_info, milliseconds=True))
+            # Intent: keep every normalized cue addressable after resumable
+            # long-media chunks are merged.
+            # Decision: namespace per-record sentence IDs only when FunASR
+            # returns multiple records; single-pass compatibility is unchanged.
+            # Reason: each chunk restarts upstream IDs at ``segment-000001``.
+            # Evidence: a 21-chunk production run yielded 2,214 cues but only
+            # 175 unique IDs before this adapter boundary.
+            # Effective scope: multi-record FunASR/SenseVoice normalization;
+            # text, timestamps, raw ASR, and provider metadata are unchanged.
+            record_prefix = (
+                f"funasr-record-{record_index:04d}" if len(records) > 1 else ""
+            )
+            cues.extend(
+                _segments_from_sequence(
+                    sentence_info,
+                    milliseconds=True,
+                    segment_id_prefix=record_prefix,
+                )
+            )
             continue
         text = _clean_asr_text(_first_text(record))
         metadata = _asr_metadata(record)

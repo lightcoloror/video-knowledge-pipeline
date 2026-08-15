@@ -117,6 +117,54 @@ def test_complete_chunks_do_not_claim_speech_completeness_without_vad(
     assert result["status"] == "warning"
 
 
+def test_readable_projection_follows_normalized_lineage_to_raw_source(
+    tmp_path: Path,
+) -> None:
+    root, normalized = _bundle(
+        tmp_path,
+        {
+            "schema": "video_knowledge_funasr_chunked_raw_output.v1",
+            "status": "completed",
+            "quality_status": "degraded",
+            "ok": True,
+            "duration_seconds": 600,
+            "chunk_seconds": 300,
+            "chunk_count": 2,
+            "successful_chunk_count": 2,
+            "successful_chunk_indexes": [0, 1],
+            "failed_chunk_count": 0,
+            "failed_chunks": [],
+            "gaps": [],
+            "overlap_merge": {
+                "status": "review_required",
+                "boundary_review_required_count": 1,
+            },
+            "chunk_results": [
+                {"chunk_index": 0, "text": "第一块", "chunk_offset_seconds": 0},
+                {"chunk_index": 1, "text": "第二块", "chunk_offset_seconds": 300},
+            ],
+        },
+    )
+    readable = root / "readable-transcript.json"
+    _write_json(
+        readable,
+        {
+            "source_path": str(normalized),
+            "segments": json.loads(normalized.read_text(encoding="utf-8"))["segments"],
+        },
+    )
+
+    result = assess_transcript_source_completeness(root, readable)
+
+    assert result["source_schema"] == "video_knowledge_funasr_chunked_raw_output.v1"
+    assert result["status"] == "failed"
+    assert result["chunk_integrity"]["quality_status"] == "degraded"
+    assert result["chunk_integrity"]["boundary_review_required_count"] == 1
+    assert "asr_chunk_boundary_review_required" in {
+        row["kind"] for row in result["issues"]
+    }
+
+
 def test_transcript_gate_labels_span_coverage_without_overclaiming(
     tmp_path: Path,
 ) -> None:

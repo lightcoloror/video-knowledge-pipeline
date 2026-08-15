@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
+from video_knowledge_pipeline import video
 from video_knowledge_pipeline.orchestrator import _frame_sampling_plan
 from video_knowledge_pipeline.supplemental_frame_sampling import plan_supplemental_frame_sampling
 from video_knowledge_pipeline.video import fixed_timepoints
@@ -43,6 +45,40 @@ def test_fixed_timepoints_never_seeks_to_exact_eof() -> None:
     assert len(points) == 80
     assert points[-1][0] == duration - 0.1
     assert all(point < duration for point, _signal in points)
+
+
+def test_video_probe_prefers_decodable_stream_duration_over_audio_tailed_container(
+    tmp_path: Path, monkeypatch
+) -> None:
+    media = tmp_path / "audio-tailed.mp4"
+    media.write_bytes(b"fixture")
+    payload = {
+        "streams": [
+            {
+                "codec_type": "video",
+                "duration": "6181.493667",
+                "width": 1920,
+                "height": 1200,
+                "avg_frame_rate": "15/1",
+            },
+            {"codec_type": "audio", "duration": "6181.538344"},
+        ],
+        "format": {"duration": "6181.538344"},
+    }
+    monkeypatch.setattr(video, "resolve_media_tool", lambda name: f"fixture-{name}")
+    monkeypatch.setattr(
+        video.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=json.dumps(payload), stderr=""),
+    )
+
+    metadata = video._probe_with_ffprobe(media)
+
+    assert metadata["duration_seconds"] == 6181.493667
+    points = fixed_timepoints(
+        metadata["duration_seconds"], interval=metadata["duration_seconds"] / 79, max_points=80
+    )
+    assert points[-1][0] == metadata["duration_seconds"] - 0.1
 
 
 def test_triage_first_reserves_budget_for_scene_or_semantic_points() -> None:

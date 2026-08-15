@@ -243,21 +243,45 @@ def _segment_timing_is_estimated(segment: dict[str, Any]) -> bool:
 
 
 def _resolve_raw_source(root: Path, transcript_path: Path) -> Path | None:
-    candidates = [transcript_path, root / "normalized-transcript.json"]
-    for candidate in candidates:
-        if not candidate.is_file():
+    """Follow local transcript lineage until the machine ASR receipt is found.
+
+    Intent: stop readable/corrected projections from hiding the raw ASR quality
+    status behind one intermediate ``source_path`` hop.
+    Decision: follow a bounded, cycle-safe chain and prefer a supported raw ASR
+    schema; retain the last resolvable source for explicit unsupported reporting.
+    Reason: VKP's readable transcript points to normalized-transcript.json, which
+    in turn points to raw-asr-output.json. Returning the first hop made source
+    completeness incorrectly report ``schema:missing``.
+    Evidence: the two Cantonese interview Bundles use exactly this two-hop
+    lineage and one raw receipt is degraded at chunk boundaries.
+    Effective scope: read-only transcript quality lineage resolution.
+    """
+
+    queue = [transcript_path, root / "normalized-transcript.json"]
+    seen: set[Path] = set()
+    last_source: Path | None = None
+    for _ in range(12):
+        if not queue:
+            break
+        candidate = queue.pop(0).expanduser().resolve()
+        if candidate in seen or not candidate.is_file():
             continue
+        seen.add(candidate)
         value = read_json(candidate)
         if not isinstance(value, dict):
             continue
+        schema = str(value.get("schema") or "")
+        if schema in {FUNASR_SINGLE_PASS_SCHEMA, FUNASR_CHUNKED_SCHEMA}:
+            return candidate
         raw = str(value.get("source_path") or "").strip()
         if not raw:
             continue
         path = Path(raw).expanduser()
         if not path.is_absolute():
             path = candidate.parent / path
-        return path.resolve()
-    return None
+        last_source = path.resolve()
+        queue.insert(0, last_source)
+    return last_source
 
 
 def _transcript_segments(path: Path) -> list[dict[str, Any]]:
@@ -297,10 +321,30 @@ def _assess_chunked_source(result: dict[str, Any], payload: dict[str, Any]) -> N
     gaps = [row for row in payload.get("gaps") or [] if isinstance(row, dict)]
     empty_chunk_indexes = _empty_chunk_indexes(payload)
     status = str(payload.get("status") or "")
-    overlap = _number(payload.get("overlap_seconds"))
+    quality_status = str(payload.get("quality_status") or status)
+    overlap_merge = (
+        payload.get("overlap_merge")
+        if isinstance(payload.get("overlap_merge"), dict)
+        else {}
+    )
+    boundary_review_count = _integer(
+        overlap_merge.get("boundary_review_required_count")
+    )
+    overlap = _number(
+        payload.get("overlap_seconds")
+        if payload.get("overlap_seconds") is not None
+        else payload.get("chunk_overlap_seconds")
+    )
     report_path = str(payload.get("report_path") or "").strip()
     report_exists = bool(report_path and Path(report_path).expanduser().is_file())
-    complete = (
+    # Intent: separate transport/execution completion from content-quality
+    # degradation. Decision: a six-of-six completed run has passed execution
+    # integrity even when overlap arbitration still needs review. Reason: the
+    # latter already has its own fail-closed finding and should not be reported
+    # a second time as missing chunks. Evidence: the Cantonese interview receipt
+    # completed 6/6 chunks but had three boundary-review findings. Effective
+    # scope: transcript source completeness diagnostics only.
+    execution_complete = (
         expected > 0
         and successful == expected
         and failed == 0
@@ -313,9 +357,10 @@ def _assess_chunked_source(result: dict[str, Any], payload: dict[str, Any]) -> N
     result.update(
         {
             "execution_mode": "resumable_fixed_chunks",
-            "execution_integrity": "passed" if complete else "failed",
+            "execution_integrity": "passed" if execution_complete else "failed",
             "chunk_integrity": {
                 "status": status,
+                "quality_status": quality_status,
                 "expected_chunk_count": expected,
                 "successful_chunk_count": successful,
                 "failed_chunk_count": failed,
@@ -329,10 +374,11 @@ def _assess_chunked_source(result: dict[str, Any], payload: dict[str, Any]) -> N
                 "resumed_from_checkpoint": bool(
                     payload.get("resumed_from_checkpoint")
                 ),
+                "boundary_review_required_count": boundary_review_count,
             },
         }
     )
-    if not complete:
+    if not execution_complete:
         result["issues"].append(
             _finding(
                 "asr_chunk_integrity_failed",
@@ -348,7 +394,19 @@ def _assess_chunked_source(result: dict[str, Any], payload: dict[str, Any]) -> N
                 f"ASR returned no speech text/timestamps for chunk indexes {empty_chunk_indexes}; local VAD or audio-activity evidence is required before treating them as silence",
             )
         )
-    if complete and not report_exists:
+    if quality_status == "degraded" or boundary_review_count:
+        result["issues"].append(
+            _finding(
+                "asr_chunk_boundary_review_required",
+                "fail",
+                (
+                    "ASR source is degraded at chunk boundaries: "
+                    f"quality_status={quality_status}, "
+                    f"review_required={boundary_review_count}"
+                ),
+            )
+        )
+    if execution_complete and not report_exists:
         result["issues"].append(
             _finding(
                 "asr_chunk_report_missing",

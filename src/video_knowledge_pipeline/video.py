@@ -189,7 +189,10 @@ def _probe_with_ffprobe(path: Path) -> dict:
         raise RuntimeError("ffprobe returned no JSON output")
     data = json.loads(result.stdout)
     video_stream = next((stream for stream in data.get("streams", []) if stream.get("codec_type") == "video"), {})
-    duration = data.get("format", {}).get("duration") or video_stream.get("duration") or 0
+    # Container duration commonly follows the longest audio stream. When
+    # audio extends beyond video, that value is valid for the container but
+    # not decodable for frame extraction. Prefer the video stream bound.
+    duration = video_stream.get("duration") or data.get("format", {}).get("duration") or 0
     return {
         "duration_seconds": float(duration),
         "width": video_stream.get("width"),
