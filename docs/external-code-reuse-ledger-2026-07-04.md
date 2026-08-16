@@ -1978,6 +1978,20 @@ At the time recorded above, every untracked `src/video_knowledge_pipeline/*.py` 
 严格技术镜头、证据字段、故事节拍、审核 freshness、JSON/CSV/Logseq 导出的完整五字段决策见 `docs/decisions/2026-08-01-filmed-pullfilm-v2.md`。明确拒绝第二套 FFmpeg、整段视频 VLM、自动媒体修改、静默 fallback 和未确认 NLE/发布导出。
 
 增量（2026-08-01 21:33:13 +08:00，Codex / GPT-5.6）：意图是避免 VFR 与分块预测产生边界漂移；决策是在保存预测合同中只增加逐帧时间戳和绝对 chunk offset 薄适配，并复用既有两帧容差融合处理重叠窗口；理由是继续保持 FFmpeg/解码单一出口且不自研时间轴；证据是 VFR、300 秒偏移、缺口 fail-closed、重叠窗口回归；生效范围仅为 `technical_shot_boundaries.v1` 候选时间，不改 Timeline 或媒体。全局 source-ledger 登记因 12 条无关既存校验错误被原子阻断，未绕过或污染 `SOURCE_INVENTORY.json`。
+
+## 2026-08-16 通用内容片段检索与剪后多模态验真
+
+更新时间：2026-08-16 15:21:15 +08:00 | Codex (GPT-5.6 Sol)
+
+| 上游/现有模块 | 固定版本 | 状态 | 意图 / 决策 / 理由 / 证据 / 生效范围 / 回滚 |
+| --- | --- | --- | --- |
+| VKP VideoRAG、moment index、transcript reference window、script clip alignment | VKP `475824f` 基线 | **reused / implemented** | 意图：把采访槽位扩展为任意内容查询；决策：通用层调用同一检索、范围、hash、speaker、ASR 与字幕 helper，不复制索引和 parser；理由：这些 owner 已通过真实采访 dry-run；证据：focused 14/14、相关模块 40/40、真实 Bundle 通用请求 dry-run；生效范围：派生候选与验真；回滚：停用新 CLI。 |
+| Moyf/moys-asr-workflow editor timing | `949bc84058cdae1d9c021c50203e6d2742f9392c` / AGPL-3.0 | **existing integration reused** | 意图：让人工可在安全范围内调整边界；决策：继续复用已集成 editor-utils/Waveform 时间交互，不复制新算法；理由：成熟 UI 已有撤销、吸附和 split/merge；证据：本轮再跑 64/64；生效范围：审核交互语义；回滚：使用 JSON review notes。 |
+| WhisperX interval/speaker provenance | `5f2f9d4320dd93a7d12f5ba2495eef7e0a5af963` / BSD-4-Clause | **contract adapted / no code copied** | 意图：保留词与匿名 speaker 对齐边界；决策：只消费 VKP 已有 timestamps/speaker lineage；理由：不应在片段层重跑 diarization；证据：实际读取 `whisperx/diarize.py`；生效范围：候选来源与 speaker 门；回滚：退回 segment 边界并标记 unavailable。 |
+| AutoShot technical shots | `77c82ff826a9301bb173d9be786297a49d73d081` / MIT | **existing adapter reused** | 意图：为动作/B-roll 提供真实镜头边界；决策：只消费 `technical_shot_boundaries.v1`；理由：禁止第二次解码和模型推理；证据：本地固定源码、32 视频 GPU benchmark 与 strict loader；生效范围：source shot IDs 和边界；回滚：缺证据时 fail-closed。 |
+| Shot2Story layered task contract | `ae26ac3d2f9e9a91a7fd0653bfb6a2b3cb250308` / Apache-2.0 | **design contract adapted / no code copied** | 意图：先逐证据定位，再形成故事节拍范围；决策：story beat 只读取既有 ASR/visual/shot 证据；理由：不把整段 VLM 当时间真源；证据：实际读取上游任务结构；生效范围：`story-beat-v1` profile；回滚：移除该 profile。 |
+
+明确拒绝：第二套 Provider SDK、VideoRAG/embedding 索引、FFmpeg/ASR/OCR/模型执行器、静默 fallback、整段视频上传、自动剪片、自动真人身份认定和自动发布。没有固定源码和本地 smoke 的网页搜索候选保持未集成状态。完整五字段记录见 `docs/content-clip-retrieval-and-alignment-v1-2026-08-16.md`。
 ## 2026-08-02 成熟智能总结 reader plan v1
 
 更新时间：2026-08-02 10:50:49 +08:00 | Codex / GPT-5.6

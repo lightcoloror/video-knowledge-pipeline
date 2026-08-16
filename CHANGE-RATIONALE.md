@@ -1,5 +1,17 @@
 # Change rationale
 
+## 2026-08-16 15:21:15 +08:00 | Codex (GPT-5.6 Sol) | generic content clip retrieval and post-cut verification
+
+### CR-20260816-02 — Generalized content clip workflow
+
+- 意图：把采访原声检索泛化为课程解释、教程、视觉/屏幕/声音事件、B-roll、高光和故事节拍的统一能力。
+- 决策：复用既有 VideoRAG、moment index、transcript reference window、technical shots、OCR/temporal evidence、旧 script alignment 和 Workbench；新增版本化 profile、四个通用合同、两个薄入口及 clip-only 多模态门。
+- 理由：不同内容类型需要不同证据和边界，但不需要第二套索引、FFmpeg、ASR、OCR、Provider 或状态机。
+- 证据：固定上游源码已实际读取；moys editor timing 64/64；通用与旧采访 focused 14/14、相关模块 40/40；真实 Bundle 两类通用请求 dry-run 对缺视觉/shot 证据 fail-closed。
+- 生效范围：Bundle 派生 candidate/review/alignment/repair artifacts；始终 `publication_allowed=false`。
+- 回滚方式：停用新命令并删除派生文件；旧 `script-clip-*`、Timeline、canonical transcript、媒体与上游证据保持不变。
+- 详细记录：`docs/content-clip-retrieval-and-alignment-v1-2026-08-16.md`。
+
 ## 2026-08-16 13:40:00 +08:00 | Codex (GPT-5.6 Sol) | script-to-interview-clip review closure
 
 ### CR-20260816-01 — Local candidate retrieval and post-cut truth gate

@@ -155,6 +155,8 @@ from .volcengine_model_task_matrix import run_volcengine_model_task_matrix as ru
 from .video_rag_search import search_video_rag as search_video_rag_impl
 from .script_clip_candidate_pack import build_script_clip_candidate_pack as build_script_clip_candidate_pack_impl
 from .script_clip_alignment import check_script_clip_alignment as check_script_clip_alignment_impl
+from .content_clip_candidate_pack import build_content_clip_candidate_pack as build_content_clip_candidate_pack_impl
+from .content_clip_alignment import check_content_clip_alignment as check_content_clip_alignment_impl
 from .video_evidence_query import apply_video_evidence_confirmation as apply_video_evidence_confirmation_impl, build_video_evidence_query_plan as build_video_evidence_query_plan_impl
 from .video_edit_review_pack import build_video_edit_review_pack as build_video_edit_review_pack_impl
 from .video_structure import build_video_structure as build_video_structure_impl
@@ -3243,6 +3245,40 @@ def main() -> None:
         write: bool = True,
     ) -> dict[str, Any]:
         return check_script_clip_alignment_impl(
+            bundle_dir,
+            review_notes_json,
+            fine_cut_plan_json,
+            candidate_pack_json=candidate_pack_json or None,
+            write=write,
+        )
+
+    @server.tool()
+    def content_clip_candidate_pack(
+        bundle_dir: str,
+        request_json: str,
+        top_k: int = 8,
+        retrieval_backend: str = "keyword",
+        context_seconds: float = 3.0,
+        write: bool = True,
+    ) -> dict[str, Any]:
+        return build_content_clip_candidate_pack_impl(
+            bundle_dir,
+            request_json,
+            top_k=top_k,
+            retrieval_backend=retrieval_backend,
+            context_seconds=context_seconds,
+            write=write,
+        )
+
+    @server.tool()
+    def content_clip_alignment_check(
+        bundle_dir: str,
+        review_notes_json: str,
+        fine_cut_plan_json: str,
+        candidate_pack_json: str = "",
+        write: bool = True,
+    ) -> dict[str, Any]:
+        return check_content_clip_alignment_impl(
             bundle_dir,
             review_notes_json,
             fine_cut_plan_json,
