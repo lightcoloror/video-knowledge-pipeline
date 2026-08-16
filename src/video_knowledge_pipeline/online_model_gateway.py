@@ -19,6 +19,7 @@ from .gemini_video_api import call_gemini_video
 
 from .model_api_settings import resolve_model_api_provider_config
 from .model_runtime_client import model_runtime_request
+from .dashscope_filetrans_adapter import call_dashscope_filetrans_asr
 SCHEMA = "video_knowledge_pipeline.online_model_api.v1"
 
 MODEL_TYPES = (
@@ -179,7 +180,13 @@ def online_model_api_call(
             result.update({"ok": False, "status": "missing_audio", "error": "audio_path required for asr"})
             return _write_result(result, output_dir=output_dir, write=write)
         cfg = resolve_asr_provider_config(provider_config)
-        if _should_use_litellm(cfg):
+        if str(cfg.get("provider") or "").strip().lower() == "dashscope_filetrans":
+            call = call_dashscope_filetrans_asr(
+                provider_config=cfg,
+                audio_path=audio,
+                prompt=prompt_text,
+            )
+        elif _should_use_litellm(cfg):
             call = call_litellm_asr(provider_config=cfg, audio_path=audio, prompt=prompt_text)
             if _should_fallback_from_litellm(cfg, call):
                 call = _with_litellm_fallback_metadata(
@@ -360,6 +367,7 @@ def resolve_asr_provider_config(provider_config: dict[str, Any] | None = None) -
         "profile_id": str(cfg.get("profile_id") or ""),
         "consent_id": str(cfg.get("consent_id") or ""),
         "capabilities": list(cfg.get("capabilities") or []),
+        "provider_options": dict(cfg.get("provider_options") or {}),
     }
 
 def asr_transcriptions_url(provider_config: dict[str, Any]) -> str:
@@ -422,12 +430,27 @@ def _request_plan(
             "input_text_chars": len(input_text or ""),
         }
     cfg = resolve_asr_provider_config(provider_config)
+    is_dashscope_filetrans = (
+        str(cfg.get("provider") or "").strip().lower() == "dashscope_filetrans"
+    )
     return {
         "model_type": kind,
-        "interface": "openai_audio_transcriptions",
-        "adapter_backend": _adapter_backend(cfg),
+        "interface": (
+            "dashscope_async_filetrans"
+            if is_dashscope_filetrans
+            else "openai_audio_transcriptions"
+        ),
+        "adapter_backend": (
+            "moys_asr_workflow_fixed_cli"
+            if is_dashscope_filetrans
+            else _adapter_backend(cfg)
+        ),
         "provider": _public_asr_config(cfg),
-        "url": redact_url_secrets(asr_transcriptions_url(cfg)),
+        "url": (
+            redact_url_secrets(str(cfg.get("base_url") or ""))
+            if is_dashscope_filetrans
+            else redact_url_secrets(asr_transcriptions_url(cfg))
+        ),
         "audio_path": audio_path,
         "audio_exists": Path(audio_path).expanduser().exists() if audio_path else False,
         "prompt_chars": len(prompt or ""),
@@ -527,13 +550,16 @@ def _call_result(call: dict[str, Any]) -> dict[str, Any]:
     ok = bool(call.get("ok"))
     return {
         "ok": ok,
-        "status": "ok" if ok else str(call.get("error") or "failed"),
+        "status": str(
+            call.get("status") or ("ok" if ok else call.get("error") or "failed")
+        ),
         "content": call.get("content", ""),
         "error": call.get("error", ""),
         "raw_response": call.get("raw_response"),
         "fallback_from": call.get("fallback_from", ""),
         "litellm_error": call.get("litellm_error", ""),
         "secrets_redacted": True,
+        "remote_requests_made": bool(call.get("remote_requests_made", ok)),
     }
 
 

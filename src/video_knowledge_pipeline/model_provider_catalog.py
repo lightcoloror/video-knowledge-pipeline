@@ -199,6 +199,31 @@ PROVIDER_PRESETS: tuple[dict[str, Any], ...] = (
         default_base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
     ),
     _preset(
+        "dashscope_filetrans",
+        "阿里云百炼 / Qwen Audio 录音文件识别",
+        # This is not OpenAI audio/transcriptions. VKP invokes the pinned
+        # moys-asr-workflow async filetrans adapter after consent reservation.
+        litellm_provider="dashscope",
+        capabilities=("asr",),
+        default_base_url="https://dashscope.aliyuncs.com",
+        default_model="qwen-audio-3.0-asr-flash-filetrans",
+        default_capabilities=("asr",),
+        allowed_provider_options=(
+            "workspace_id",
+            "region",
+            "language",
+            "speaker_diarization",
+            "poll_interval_seconds",
+            "poll_timeout_seconds",
+        ),
+        required_provider_options=(),
+        usage_scope="cloud_asr_candidate",
+        notes=(
+            "复用固定 moys-asr-workflow 异步 filetrans CLI；支持临时 OSS 上传、"
+            "任务轮询、粤语、词级时间戳和说话人分离。不得按 OpenAI ASR 协议调用。"
+        ),
+    ),
+    _preset(
         "openrouter",
         "OpenRouter",
         litellm_provider="openrouter",

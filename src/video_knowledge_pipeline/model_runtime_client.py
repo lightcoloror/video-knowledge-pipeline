@@ -84,6 +84,23 @@ def _consume_remote_execution_grant(*, consent_id: str, route_revision: str) -> 
     return ""
 
 
+def consume_consented_remote_runtime_grant(
+    *, consent_id: str, route_revision: str
+) -> str:
+    """Consume one already-reserved Broker call without exposing grant state.
+
+    This public thin wrapper lets audited non-proxy owner adapters participate in
+    the same consent reservation contract as the LiteLLM runtime client.  It does
+    not create authority and returns the existing fail-closed error text when no
+    matching reservation is active.
+    """
+
+    return _consume_remote_execution_grant(
+        consent_id=consent_id,
+        route_revision=route_revision,
+    )
+
+
 def model_runtime_request(
     task: str,
     *,

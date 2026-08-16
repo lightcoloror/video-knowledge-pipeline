@@ -175,3 +175,14 @@
 - 证据：第二次 clean clone 的仓内 doctor/smoke 已通过，唯一失败是旧测试的 sibling path；显式传入现有快照可校验固定 SHA。
 - 生效范围：外部合同的测试发现方式；仓内 manifest、Schema、smoke 和运行授权语义不变。
 - 回滚：可改用包资源或用户选择的下载缓存，但不得恢复固定工作区绝对/相邻路径。
+
+## 2026-08-16 17:20:00 +08:00 | Codex (GPT-5.6 Sol) | DashScope FileTrans consent closure
+
+### CR-20260816-01 — Fixed upstream FileTrans adapter behind Broker reservation
+
+- 意图：复用 `moys-asr-workflow` 的成熟 DashScope 异步 FileTrans 实现，同时禁止从通用 `online-model-api --execute` 绕过 VKP consent。
+- 决策：保留固定上游 CLI 作为唯一 Provider 执行器；新增公共薄函数消费既有 Broker runtime grant，adapter 在启动子进程前强制匹配 `consent_id + route_revision + call allowance`，无匹配授权时返回 `consent_required` 且零远程请求。
+- 理由：原 adapter 只在 docstring 中假设调用方已预留 consent，实际没有执行层硬门；重新实现上传、轮询和结果转换又会复制上游成熟代码。
+- 证据：上游 commit `949bc84058cdae1d9c021c50203e6d2742f9392c` 的 Qwen Audio/FunASR/GUI workflow 离线回归 `56 passed`；VKP adapter、online gateway 与 trusted connector 回归 `35 passed`；无授权、额度耗尽和 timeout 负例均未调用真实 Provider。
+- 生效范围：仅 `provider=dashscope_filetrans` 的远程 ASR 候选路线；不改变本地 ASR、OpenAI-compatible ASR、原始逐字稿或自动 fallback 规则。
+- 回滚方式：移除 DashScope provider preset/adapter 分支与 runtime grant wrapper；其他 ASR 路线和 Broker 状态不变。
