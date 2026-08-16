@@ -1,5 +1,17 @@
 # Change rationale
 
+## 2026-08-16 13:40:00 +08:00 | Codex (GPT-5.6 Sol) | script-to-interview-clip review closure
+
+### CR-20260816-01 — Local candidate retrieval and post-cut truth gate
+
+- 意图：按已审核脚本定位采访原声，并阻止“源视频说过”被误当成“剪后片段仍完整包含”。
+- 决策：复用 VideoRAG、moment index、transcript reference window、transcript parser、Bundle lock、run registry 和 Workbench；新增三个独立合同、两个 CLI/MCP 薄入口和 clip-only ASR 对齐门。
+- 理由：现有模块已拥有检索、时间证据和来源 lineage；这里只应增加人工审核编排，不能复制索引、转写或状态机。
+- 证据：合成测试覆盖本地候选、hash drift、CLI/MCP/Workbench、相邻说话人半开边界和全部 12 类一致性故障。
+- 生效范围：Bundle 派生候选、review TODO、alignment report 和 repair TODO；`publication_allowed=false`。
+- 回滚方式：停止调用并删除这些派生文件；源视频、精剪文件、脚本、canonical transcript、Timeline 和 speaker sidecar 均不变。
+- 详细记录：`docs/script-clip-alignment-workflow-2026-08-16.md`。
+
 ## 2026-08-10 19:16:59 +08:00 | Codex (GPT-5.6 Sol) | real-Bundle subtitle compatibility closure
 
 ### CR-20260810-05 — Registered media reuse and ambiguous chunk lineage

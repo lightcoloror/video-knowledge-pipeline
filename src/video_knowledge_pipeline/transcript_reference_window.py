@@ -27,6 +27,7 @@ def export_transcript_reference_window(
     end_seconds: float,
     rebase_timestamps: bool = True,
     human_corrections_json: str | Path | None = None,
+    validation_scope: str = "source",
     write: bool = True,
 ) -> dict[str, Any]:
     """Export one bounded, speaker-preserving evaluation reference.
@@ -55,11 +56,20 @@ def export_transcript_reference_window(
         raise ValueError("start_seconds must be non-negative")
     if end <= start:
         raise ValueError("end_seconds must be greater than start_seconds")
+    if validation_scope not in {"source", "window"}:
+        raise ValueError("validation_scope must be source or window")
 
     cues = parse_transcript(source)
     if not cues:
         raise ValueError("source transcript contains no parseable cues")
-    _require_monotonic_cues(cues)
+    if validation_scope == "source":
+        _require_monotonic_cues(cues)
+    else:
+        # Some legacy chunked transcripts contain a tiny overlap/order reset at
+        # a distant chunk boundary.  A bounded review export may validate only
+        # the requested window, but it must never suppress disorder inside the
+        # exported evidence itself.
+        _require_monotonic_cues(_window_cues(cues, start=start, end=end))
     correction_receipt: dict[str, Any] = {
         "path": "",
         "sha256": "",
@@ -162,6 +172,7 @@ def export_transcript_reference_window(
             "end_seconds": end,
             "duration_seconds": window_duration,
             "timestamps_rebased": bool(rebase_timestamps),
+            "validation_scope": validation_scope,
         },
         "speaker_evidence": {
             "speaker_count": len(speaker_counts),
@@ -291,3 +302,13 @@ def _require_monotonic_cues(cues: list[Any]) -> None:
         if end < start:
             raise ValueError(f"source transcript cue has end before start at index {index}")
         previous_start = start
+
+
+def _window_cues(cues: list[Any], *, start: float, end: float) -> list[Any]:
+    result = []
+    for cue in cues:
+        cue_start = float(cue.start)
+        cue_end = max(cue_start, float(cue.end))
+        if cue_end > start and cue_start < end:
+            result.append(cue)
+    return result

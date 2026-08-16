@@ -216,6 +216,8 @@ from .video_rag_http import serve_video_rag, video_rag_service_plan
 from .volcengine_model_routing import volcengine_model_routing
 from .volcengine_model_task_matrix import run_volcengine_model_task_matrix
 from .video_rag_search import search_video_rag
+from .script_clip_candidate_pack import build_script_clip_candidate_pack
+from .script_clip_alignment import check_script_clip_alignment
 from .video_evidence_query import apply_video_evidence_confirmation, build_video_evidence_query_plan
 from .video_edit_review_pack import build_video_edit_review_pack
 from .video_source import prepare_video_source
@@ -1555,6 +1557,23 @@ def main(argv: list[str] | None = None) -> int:
             retrieval_backend=args.retrieval_backend,
             write=not args.no_write,
         )
+    elif args.command == "script-clip-candidate-pack":
+        result = build_script_clip_candidate_pack(
+            args.bundle_dir,
+            args.request_json,
+            top_k=args.top_k,
+            retrieval_backend=args.retrieval_backend,
+            context_seconds=args.context_seconds,
+            write=not args.no_write,
+        )
+    elif args.command == "script-clip-alignment-check":
+        result = check_script_clip_alignment(
+            args.bundle_dir,
+            args.review_notes_json,
+            args.fine_cut_plan_json,
+            candidate_pack_json=args.candidate_pack_json or None,
+            write=not args.no_write,
+        )
     elif args.command == "video-evidence-query-plan":
         result = build_video_evidence_query_plan(
             args.bundle_dir,
@@ -2541,6 +2560,8 @@ def _mcp_callables() -> dict[str, Any]:
         "long_video_memory_pack": build_long_video_memory_pack,
         "video_rag_pack": build_video_rag_pack,
         "video_rag_search": search_video_rag,
+        "script_clip_candidate_pack": build_script_clip_candidate_pack,
+        "script_clip_alignment_check": check_script_clip_alignment,
         "video_evidence_query_plan": build_video_evidence_query_plan,
         "apply_video_evidence_confirmation": apply_video_evidence_confirmation,
         "video_rag_service_plan": video_rag_service_plan,
@@ -2680,6 +2701,8 @@ _MCP_TOOL_BY_MANIFEST_KEY = {
     "mcp_long_video_memory_pack_args": "long_video_memory_pack",
     "mcp_video_rag_pack_args": "video_rag_pack",
     "mcp_video_rag_search_args": "video_rag_search",
+    "mcp_script_clip_candidate_pack_args": "script_clip_candidate_pack",
+    "mcp_script_clip_alignment_check_args": "script_clip_alignment_check",
     "mcp_video_rag_service_plan_args": "video_rag_service_plan",
     "mcp_prepare_transcript_edit_session_args": "prepare_transcript_edit_session",
     "mcp_apply_transcript_edits_args": "apply_transcript_edits",
@@ -4193,6 +4216,27 @@ def build_parser() -> argparse.ArgumentParser:
     video_rag_search.add_argument("--retrieval-backend", default="keyword", choices=["keyword", "sqlite", "vector"])
     video_rag_search.add_argument("--no-ensure-pack", action="store_true", help="Do not build video-rag-pack automatically when JSONL is missing")
     video_rag_search.add_argument("--no-write", action="store_true")
+
+    script_clip_candidates = sub.add_parser(
+        "script-clip-candidate-pack",
+        help="Retrieve local source-clip candidates for explicit script slots; human selection is always required",
+    )
+    script_clip_candidates.add_argument("bundle_dir")
+    script_clip_candidates.add_argument("request_json")
+    script_clip_candidates.add_argument("--top-k", type=int, default=8)
+    script_clip_candidates.add_argument("--retrieval-backend", choices=["keyword", "sqlite"], default="keyword")
+    script_clip_candidates.add_argument("--context-seconds", type=float, default=3.0)
+    script_clip_candidates.add_argument("--no-write", action="store_true")
+
+    script_clip_alignment = sub.add_parser(
+        "script-clip-alignment-check",
+        help="Check human-selected script quotes against fine-cut ranges, clip-only ASR, speakers, and subtitles",
+    )
+    script_clip_alignment.add_argument("bundle_dir")
+    script_clip_alignment.add_argument("review_notes_json")
+    script_clip_alignment.add_argument("fine_cut_plan_json")
+    script_clip_alignment.add_argument("--candidate-pack-json", default="")
+    script_clip_alignment.add_argument("--no-write", action="store_true")
 
     evidence_query = sub.add_parser("video-evidence-query-plan", help="Build a local coarse-to-fine evidence review plan")
     evidence_query.add_argument("bundle_dir")
