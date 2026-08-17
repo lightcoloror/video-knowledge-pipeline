@@ -5,6 +5,7 @@ from urllib.parse import urlsplit
 from typing import Any
 
 from .config import processing_profile
+from .content_profile import resolve_content_profile
 from .models import now_iso
 from .run_artifact_registry import register_bundle_run
 from .smart_summary_section_apply import apply_smart_summary_sections
@@ -12,6 +13,7 @@ from .smart_summary_section_workflow import build_smart_summary_section_workflow
 from .storage import read_json, write_json
 from .model_task_gateway import model_task_api_call
 from .model_api_settings import resolve_model_api_provider_config
+from .production_artifact_gate import evaluate_production_artifact_gate
 from .companion_courseware_text import load_companion_courseware_text
 from .model_business_authorization import create_business_child_consent, validate_model_business_authorization
 from .trusted_model_connector import execute_consented_model_task
@@ -55,6 +57,23 @@ def run_smart_summary_section_llm_rewrite(
     root = Path(bundle_dir).expanduser().resolve()
     exports = root / "exports"
     exports.mkdir(parents=True, exist_ok=True)
+    production_gate = evaluate_production_artifact_gate(
+        root,
+        artifact_kind="smart_summary_sections",
+        write=write,
+    )
+    if execute and not production_gate.get("formal_generation_allowed"):
+        result = {
+            "schema": SCHEMA,
+            "bundle_dir": str(root),
+            "execute": True,
+            "status": "blocked_by_production_artifact_gate",
+            "ok": False,
+            "production_artifact_gate": production_gate,
+            "provider_call_performed": False,
+            "next_actions": ["Resolve production-artifact-gate.md; no Provider call was made."],
+        }
+        return _write_result(root, result, revisions=[], failed_items=[], calls=[], write=write)
     workflow = build_smart_summary_section_workflow(root, target_chapters=target_chapters, write=write)
     cfg = resolve_text_provider_config(
         resolve_model_api_provider_config("summary_rewrite", provider_config)
@@ -153,7 +172,11 @@ def run_smart_summary_section_llm_rewrite(
         result.update({"status": "business_authorization_write_required", "ok": False, "next_actions": ["Remote business-child execution writes an immutable child consent and Broker receipt; omit --no-write."]})
         return _write_result(root, result, revisions=[], failed_items=[], calls=calls, write=write)
     business_context = _prepare_business_summary_context(root, cfg, business_authorization_path) if business_authorization_path else None
-
+    content_profile = resolve_content_profile(root)
+    interview_profile = content_profile.get("profile_id") in {
+        "interview-v1",
+        "medical-insurance-interview-v1",
+    }
 
     for section in candidates:
         section_id = str(section.get("section_id") or "").strip()
@@ -161,7 +184,11 @@ def run_smart_summary_section_llm_rewrite(
         messages = [
             {
                 "role": "system",
-                "content": "你是课程视频智能总结的章节编辑器。只输出这一章的 Markdown 小节正文，不要输出代码块，不要复制 ASR 流水账，不要编造视觉证据。",
+                "content": (
+                    "你是采访事实摘要的章节编辑器。只还原受访者原话、经历、感受、已确认事实和待核实项；不得生成方法论、面向读者的医疗保险建议、高频话术或可复用表达。只输出本章 Markdown，不要编造视觉证据。"
+                    if interview_profile
+                    else "你是课程视频智能总结的章节编辑器。只输出这一章的 Markdown 小节正文，不要输出代码块，不要复制 ASR 流水账，不要编造视觉证据。"
+                ),
             },
             {"role": "user", "content": prompt},
         ]

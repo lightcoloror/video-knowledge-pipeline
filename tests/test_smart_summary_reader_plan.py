@@ -352,6 +352,25 @@ def test_interview_plan_anonymizes_unbound_identity_and_drops_prescriptive_actio
     assert "优先选择非手术" not in rendered
 
 
+def test_explicit_medical_interview_renders_fact_first_sections() -> None:
+    rendered = render_reader_summary(
+        _valid_plan(),
+        title="客户医疗采访",
+        first_time="00:00:00.000",
+        last_time="00:03:00.000",
+        content_profile="medical-insurance-interview-v1",
+    )
+
+    assert "## 核心主题 / 事实主线" in rendered
+    assert "## 事实时间线" in rendered
+    assert "## 受访者原话与感受" in rendered
+    assert "## 明确后续事项" in rendered
+    assert "## 原话摘录" in rendered
+    assert "## 待核实事项 / 隐私与发布边界" in rendered
+    assert "## 关键观点 / 方法论" not in rendered
+    assert "## 高频话术 / 可复用表达" not in rendered
+
+
 def test_reader_plan_normalizes_overlapping_theme_windows_and_action_verbs() -> None:
     plan = _valid_plan()
     plan["themes"][0]["time_range"] = "00:00:00.000 - 00:01:20.000"

@@ -100,6 +100,12 @@ def _discover_bundles(batch_input: str | Path) -> list[Path]:
     return []
 
 
+def discover_bundles(batch_input: str | Path) -> list[Path]:
+    """Public read-only Bundle discovery reused by cross-run lineage tools."""
+
+    return _discover_bundles(batch_input)
+
+
 def _bundles_from_json(data: Any, *, base_dir: Path) -> list[Path]:
     bundles: list[Path] = []
     if isinstance(data, dict):

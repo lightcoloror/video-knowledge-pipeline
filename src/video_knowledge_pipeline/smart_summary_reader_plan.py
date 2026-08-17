@@ -381,7 +381,7 @@ def normalize_reader_plan_candidate(
                 }
             )
 
-    if content_profile == "interview":
+    if _is_interview_profile(content_profile):
         repairs.extend(_anonymize_unbound_interview_identities(normalized, fact_pack=fact_pack))
         repairs.extend(_normalize_interview_theme_fields(normalized.get("themes") or []))
 
@@ -418,7 +418,7 @@ def normalize_reader_plan_candidate(
     for index, item in enumerate(normalized.get("actions") or [], start=1):
         if not isinstance(item, dict):
             continue
-        if content_profile == "interview" and _is_prescriptive_health_or_insurance_action(
+        if _is_interview_profile(content_profile) and _is_prescriptive_health_or_insurance_action(
             str(item.get("text") or "")
         ):
             repairs.append(
@@ -724,7 +724,9 @@ def validate_reader_plan(
     errors.extend(_semantic_text_errors(plan))
     errors.extend(_duplicate_claim_errors(plan))
 
-    source_has_actions = str(fact_pack.get("content_profile") or "") != "interview" and any(
+    source_has_actions = not _is_interview_profile(
+        str(fact_pack.get("content_profile") or "")
+    ) and any(
         str(fact.get("fact_type") or "") == "actions"
         for section in fact_pack.get("sections") or []
         if isinstance(section, dict)
@@ -755,19 +757,21 @@ def render_reader_summary(
     title: str,
     first_time: str,
     last_time: str,
+    content_profile: str = "",
 ) -> str:
     """Render validated content into deterministic reader Markdown."""
 
     lines = [f"# {title} - 智能总结", "", "<!-- codex_llm_rewrite_final -->", "", "## 基本信息"]
     lines.extend([f"- 标题：{title}", f"- 内容范围：{first_time} - {last_time}", "", "## 一句话概览", str(plan["overview"]["text"]).strip()])
 
-    is_interview = "采访" in str(title)
-    lines.extend(["", "## 核心主题 / 内容主线" if is_interview else "## 核心主题 / 课程主线"])
+    explicit_interview = _is_interview_profile(content_profile)
+    is_interview = explicit_interview or "采访" in str(title)
+    lines.extend(["", "## 核心主题 / 事实主线" if explicit_interview else ("## 核心主题 / 内容主线" if is_interview else "## 核心主题 / 课程主线")])
     for item in plan.get("core_insights") or []:
         times = "、".join(item.get("time_ranges") or [])
         lines.append(f"- **{item['title']}**（{times}）：{item['text']}")
 
-    lines.extend(["", "## 分段总结"])
+    lines.extend(["", "## 事实时间线" if explicit_interview else "## 分段总结"])
     for theme in plan.get("themes") or []:
         lines.extend(["", f"### {theme['title']}（{theme['time_range']}）", str(theme["summary"]).strip()])
         labels = (
@@ -780,19 +784,19 @@ def render_reader_summary(
             if value:
                 lines.append(f"- {label}：{value}")
 
-    lines.extend(["", "## 关键观点 / 方法论"])
+    lines.extend(["", "## 受访者原话与感受" if explicit_interview else "## 关键观点 / 方法论"])
     for item in plan.get("principles") or []:
         times = "、".join(item.get("time_ranges") or [])
         lines.append(f"- **{item['title']}**（{times}）：{item['text']}")
 
-    lines.extend(["", "## 可执行动作清单"])
+    lines.extend(["", "## 明确后续事项" if explicit_interview else "## 可执行动作清单"])
     actions = plan.get("actions") or []
     lines.extend(
         [f"- {item['time_range']}：{item['text']}" for item in actions]
         or ["- 未从当前证据中识别到明确行动项。"]
     )
 
-    lines.extend(["", "## 高频话术 / 可复用表达"])
+    lines.extend(["", "## 原话摘录" if explicit_interview else "## 高频话术 / 可复用表达"])
     expressions = plan.get("reusable_expressions") or []
     for item in expressions:
         text = str(item["text"]).strip()
@@ -801,7 +805,7 @@ def render_reader_summary(
     if not expressions:
         lines.append("- 无可确认原句；不生成伪金句。")
 
-    lines.extend(["", "## 待复核点 / 低置信内容"])
+    lines.extend(["", "## 待核实事项 / 隐私与发布边界" if explicit_interview else "## 待复核点 / 低置信内容"])
     review_items = plan.get("review_items") or []
     for item in review_items:
         time_range = str(item.get("time_range") or "未定位")
@@ -827,7 +831,7 @@ def evaluate_reader_markdown_semantics(content: str) -> dict[str, Any]:
     if any(_compact(value) in _compact(overview) for value in _META_PATTERNS):
         problems.append("overview_describes_generation_instead_of_content")
 
-    segment = _markdown_section(text, "分段总结")
+    segment = _markdown_section(text, "事实时间线") or _markdown_section(text, "分段总结")
     headings = re.findall(r"(?m)^###\s+(.+?)\s*$", segment)
     for heading in headings:
         title = _TIME_RANGE_RE.sub("", heading).strip(" （()）-—")
@@ -836,7 +840,7 @@ def evaluate_reader_markdown_semantics(content: str) -> dict[str, Any]:
     ranges = [match.group(0) for match in _TIME_RANGE_RE.finditer(segment)]
     problems.extend(_ordered_range_errors(ranges, prefix="markdown_theme"))
 
-    action_section = _markdown_section(text, "可执行动作清单")
+    action_section = _markdown_section(text, "明确后续事项") or _markdown_section(text, "可执行动作清单")
     action_rows = [re.sub(r"^\s*[-*]\s*", "", line).strip() for line in action_section.splitlines() if re.match(r"^\s*[-*]\s+", line)]
     for index, row in enumerate(action_rows, start=1):
         if "未从当前证据" in row:
@@ -992,6 +996,14 @@ def _looks_actionable(value: str) -> bool:
         return False
     head = compact[:16]
     return any(_compact(verb) in head for verb in _ACTION_VERBS)
+
+
+def _is_interview_profile(value: str) -> bool:
+    return str(value or "").strip().lower() in {
+        "interview",
+        "interview-v1",
+        "medical-insurance-interview-v1",
+    }
 
 
 def _compact(value: str) -> str:

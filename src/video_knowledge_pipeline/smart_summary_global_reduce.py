@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from .canonical_json import canonical_json_sha256
+from .content_profile import resolve_content_profile
 from .file_hash import sha256_file
 from .model_api_settings import resolve_model_api_provider_config
 from .model_business_authorization import (
@@ -14,6 +15,7 @@ from .model_business_authorization import (
 )
 from .model_task_gateway import model_task_api_call
 from .models import now_iso
+from .production_artifact_gate import evaluate_production_artifact_gate
 from .smart_summary_codex import generate_smart_summary_with_codex
 from .smart_summary_reader_plan import (
     SCHEMA as READER_PLAN_SCHEMA,
@@ -57,6 +59,25 @@ def run_smart_summary_global_reduce(
 
     root = Path(bundle_dir).expanduser().resolve()
     exports = root / "exports"
+    production_gate = evaluate_production_artifact_gate(
+        root,
+        artifact_kind="smart_summary_global_reduce",
+        write=write,
+    )
+    if (
+        execute or reuse_candidate or recovery_execution_report
+    ) and not production_gate.get("formal_generation_allowed"):
+        result = {
+            "schema": SCHEMA,
+            "bundle_dir": str(root),
+            "execute": bool(execute),
+            "status": "blocked_by_production_artifact_gate",
+            "ok": False,
+            "production_artifact_gate": production_gate,
+            "provider_call_performed": False,
+            "next_actions": ["Resolve production-artifact-gate.md; no Provider call or candidate install was performed."],
+        }
+        return _write(root, result, prompt="", fact_pack={}, write=write)
     revisions_path = exports / "smart-summary-section-llm-revisions.json"
     workflow_path = exports / "smart-summary-section-workflow.json"
     course_map_path = exports / "course-map.json"
@@ -244,6 +265,7 @@ def run_smart_summary_global_reduce(
                     title=title,
                     first_time=first_time,
                     last_time=last_time,
+                    content_profile=str(fact_pack.get("content_profile") or ""),
                 )
                 if reader_plan_validation["passed"]
                 else ""
@@ -590,6 +612,7 @@ def _validated_reader_plan_content(
             title=title,
             first_time=first_time,
             last_time=last_time,
+            content_profile=str(fact_pack.get("content_profile") or ""),
         )
         if validation.get("passed")
         else ""
@@ -788,7 +811,8 @@ def _render_reduce_prompt(
 ) -> str:
     manifest = _mapping(root / "manifest.json")
     title = str(manifest.get("title") or root.name)
-    content_profile = "interview" if "采访" in title else "course_or_general"
+    profile = resolve_content_profile(root, manifest=manifest)
+    content_profile = str(profile.get("profile_id") or "course-or-general-v1")
     fact_sections = _fact_sections_by_id(fact_pack)
     payload = {
         "title": title,
@@ -834,8 +858,8 @@ def _render_reduce_prompt(
 18. verbatim_quote 必须能在相应 evidence snippet 中逐字找到；否则使用 reusable_expression，不得加引号冒充原句。 普通结论优先引用每章 eligible-evidence-set；只有逐字原句才引用单条 snippet ID。
 19. 严格控制数组规模：core_insights 3–6 项（短内容不得为凑数重复观点）、themes 3–8 项、principles 3–5 项、actions 0–8 项、reusable_expressions 0–5 项、review_items 0–6 项。
 20. 直接输出最终 JSON；不要在隐藏推理或解释中重复输入材料。
-21. 当 content_profile=interview 时，未经 eligible evidence 明确出现的姓名、身份、职务一律不得推断；使用“受访者”“采访者”等匿名角色。
-22. 当 content_profile=interview 时，个人治疗、投保或理赔选择只能表述为“受访者的经历/选择/看法”，不得改写成面向读者的医疗或保险建议；actions 只保留访谈中明确承诺的后续动作，没有则返回空数组。
+21. interview-v1/medical-insurance-interview-v1：不推断姓名身份，使用匿名角色；个人医疗保险经历必须归因给受访者，不改写为普适建议，actions 仅保留明确承诺。
+22. medical-insurance-interview-v1：只写事实时间线、原话感受、已确认信息、待核实和隐私边界；禁方法论、高频话术与可复用表达。
 """.strip()
     return instructions + "\n\n输入 JSON：\n" + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
@@ -1013,7 +1037,10 @@ def _chapter_fact_pack(
 ) -> dict[str, Any]:
     manifest = _mapping(root / "manifest.json")
     title = str(manifest.get("title") or root.name)
-    content_profile = "interview" if "采访" in title else "course_or_general"
+    content_profile = str(
+        resolve_content_profile(root, manifest=manifest).get("profile_id")
+        or "course-or-general-v1"
+    )
     workflow_sections = {
         str(row.get("section_id") or ""): row
         for row in workflow.get("sections") or []

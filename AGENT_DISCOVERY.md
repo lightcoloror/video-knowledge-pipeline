@@ -1,5 +1,13 @@
 # AGENT_DISCOVERY
 
+## 2026-08-17 正式产物硬门与采访档案
+
+- `production-artifact-gate <bundle>`：统一检查转录、说话人、语义事实、隐私和发布状态；失败时所有 Smart Summary Provider 执行入口在调用前 fail-closed。
+- `source-review-lineage <bundle> [--search-root ...] [--apply]`：按媒体 SHA-256 / VKP `video_id` 发现同源人工审核；发现不等于应用，正式绑定必须显式执行并校验产物哈希。
+- `content-profile <bundle> --profile medical-insurance-interview-v1`：启用客户医疗保险采访的说话人角色、金额/数字、隐私、个案边界和人工发布审核要求。
+- 契约：`production_artifact_gate.v1`、`source_review_lineage.v1`、`content_profile.v1`。
+- 边界：机器草稿可保留，但必须有 `review-required` 水印；执行成功不代表内容可靠或允许发布。
+
 ## Update Record
 ### 2026-07-30 15:19:34 +08:00 | Codex (GPT-5.6)
 - Hardened long-media ASR overlap merge by reusing FunASR character timestamps to crop boundary-spanning sentences to their unique core window while preserving raw chunks and review evidence. Added explicit `--rebuild-from-checkpoint` for merge-only recovery; it reuses the exact v2 checkpoint/manifest, never runs a child model, and records source freshness as not revalidated when removable media is unavailable.

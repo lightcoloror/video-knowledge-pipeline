@@ -5,6 +5,7 @@ import statistics
 from pathlib import Path
 from typing import Any
 
+from .content_profile import profile_requirements
 from .models import now_iso
 from .quality_benchmark import transcript_quality_metrics
 from .run_artifact_registry import register_bundle_run
@@ -449,10 +450,24 @@ def _speaker_diarization_status(
         except (TypeError, ValueError):
             continue
     if required is None:
+        profile_id = str(
+            manifest.get("content_profile")
+            or manifest.get("video_content_profile")
+            or "course-or-general-v1"
+        )
+        try:
+            profile_requires_speakers = bool(
+                profile_requirements(profile_id).get("speaker_diarization_required")
+            )
+        except ValueError:
+            # Unknown profiles never weaken explicit requirements; the profile
+            # validator reports the invalid identifier separately.
+            profile_requires_speakers = False
         required = bool(
             requirements.get("speaker_diarization_required")
             or manifest.get("speaker_diarization_required")
             or declared_expected > 1
+            or profile_requires_speakers
         )
     minimum = max(1, int(min_speaker_count or 1), declared_expected)
     spoken = [cue for cue in cues if str(getattr(cue, "text", "") or "").strip()]

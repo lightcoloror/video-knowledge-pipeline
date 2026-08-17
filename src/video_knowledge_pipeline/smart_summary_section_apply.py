@@ -6,6 +6,7 @@ from typing import Any
 
 from .powershell import quote_powershell_literal as _ps_quote
 from .models import now_iso
+from .production_artifact_gate import evaluate_production_artifact_gate
 from .run_artifact_registry import register_bundle_run
 from .smart_summary_codex import generate_smart_summary_with_codex
 from .storage import read_json, write_json
@@ -31,6 +32,33 @@ def apply_smart_summary_sections(
     """
 
     root = Path(bundle_dir).expanduser().resolve()
+    production_gate = evaluate_production_artifact_gate(
+        root,
+        artifact_kind="smart_summary",
+        write=write,
+    )
+    if not production_gate.get("formal_generation_allowed"):
+        return {
+            "schema": SCHEMA,
+            "bundle_dir": str(root),
+            "input_json": str(input_json or ""),
+            "status": "blocked_by_production_artifact_gate",
+            "section_count": 0,
+            "installed_section_count": 0,
+            "missing_section_count": 0,
+            "require_all_sections": bool(require_all_sections),
+            "smart_summary_codex_path": str(root / "exports" / "smart-summary.codex.md"),
+            "quality_status": "blocked_review_required",
+            "quality_passed": False,
+            "production_artifact_gate": production_gate,
+            "operator_boundary": {
+                "local_only": True,
+                "no_cloud_call": True,
+                "formal_filename_not_written": True,
+                "purpose": "Prevent a section pack from bypassing the formal Smart Summary quality gate.",
+            },
+            "updated_at": now_iso(),
+        }
     exports = root / "exports"
     exports.mkdir(parents=True, exist_ok=True)
     workflow = _read_mapping(exports / "smart-summary-section-workflow.json")

@@ -57,6 +57,7 @@ from .cloud_asr import plan_cloud_asr_run, prepare_cloud_asr_audio, run_cloud_as
 from .config import config_status, model_api_settings_status, set_asr_runtime_profile, set_vision_execution_profile, DEFAULT_LOCAL_FRAME_BUDGET, DEFAULT_LOCAL_FRAME_SAMPLE_INTERVAL_SECONDS, DEFAULT_LOCAL_FRAME_SAMPLING_MODE, LOCAL_FRAME_SAMPLING_MODES
 from .content_asset_batch import batch_content_asset_status, content_handoff_pack
 from .content_asset_status import content_asset_status
+from .content_profile import SUPPORTED_PROFILES, apply_content_profile
 from .controlled_execution_smoke import controlled_execution_smoke
 from .consented_model_task_cli import run_consented_model_task_cli
 from .model_business_authorization import (
@@ -119,6 +120,7 @@ from .openclaw_live_smoke import openclaw_live_smoke
 from .peepshow_adapter import attach_peepshow_output_to_bundle
 from .punctuation_model_stage import run_punctuation_model_stage
 from .quality_console import export_quality_console
+from .production_artifact_gate import evaluate_production_artifact_gate
 from .quality_finalize import finalize_quality_outputs
 from .quality_benchmark import build_quality_benchmark, report_quality_benchmark, run_quality_benchmark
 from .quality_benchmark_arbitration import build_quality_benchmark_arbitration, evaluate_quality_benchmark_arbitration
@@ -134,6 +136,7 @@ from .run_artifact_registry import build_run_artifact_registry
 from .screen_text_recovery import run_screen_text_recovery
 from .scene_detection_adapter import run_scene_detection
 from .scene_candidate_evidence import build_scene_candidate_evidence
+from .source_review_lineage import discover_source_review_lineage
 from .campplus_speaker_center_sidecar import build_campplus_speaker_center_sidecar
 from .speaker_global_alignment import (
     bind_local_voiceprint_role,
@@ -2202,6 +2205,27 @@ def main(argv: list[str] | None = None) -> int:
         )
     elif args.command == "semantic-chapter-plan":
         result = build_semantic_chapter_plan(args.bundle_dir, title=args.title, chapter_mode=args.chapter_mode, write=not args.no_write)
+    elif args.command == "content-profile":
+        result = apply_content_profile(
+            args.bundle_dir,
+            profile_id=args.profile,
+            write=not args.no_write,
+        )
+    elif args.command == "source-review-lineage":
+        result = discover_source_review_lineage(
+            args.bundle_dir,
+            search_roots=args.search_roots,
+            apply=args.apply,
+            write=not args.no_write,
+        )
+    elif args.command == "production-artifact-gate":
+        result = evaluate_production_artifact_gate(
+            args.bundle_dir,
+            artifact_kind=args.artifact_kind,
+            search_roots=args.search_roots,
+            discover_prior_reviews=not args.no_discover_prior_reviews,
+            write=not args.no_write,
+        )
     elif args.command == "build-smart-summary-chapters":
         result = build_smart_summary_chapter_pack(
             args.bundle_dir,
@@ -4886,6 +4910,24 @@ def build_parser() -> argparse.ArgumentParser:
     semantic_chapters.add_argument("--title", default="")
     semantic_chapters.add_argument("--chapter-mode", choices=["semantic", "fixed"], default="semantic")
     semantic_chapters.add_argument("--no-write", action="store_true")
+
+    content_profile = sub.add_parser("content-profile", help="Apply a validated content profile without inferring review approval")
+    content_profile.add_argument("bundle_dir")
+    content_profile.add_argument("--profile", choices=SUPPORTED_PROFILES, required=True)
+    content_profile.add_argument("--no-write", action="store_true")
+
+    source_review_lineage = sub.add_parser("source-review-lineage", help="Discover exact same-source human review artifacts and optionally bind their immutable lineage")
+    source_review_lineage.add_argument("bundle_dir")
+    source_review_lineage.add_argument("--search-root", dest="search_roots", action="append", default=[])
+    source_review_lineage.add_argument("--apply", action="store_true", help="Bind the best exact-source review lineage; never copies or overwrites transcript text")
+    source_review_lineage.add_argument("--no-write", action="store_true")
+
+    production_artifact_gate = sub.add_parser("production-artifact-gate", help="Evaluate the hard gate for formal transcript/summary artifacts")
+    production_artifact_gate.add_argument("bundle_dir")
+    production_artifact_gate.add_argument("--artifact-kind", default="smart_summary")
+    production_artifact_gate.add_argument("--search-root", dest="search_roots", action="append", default=[])
+    production_artifact_gate.add_argument("--no-discover-prior-reviews", action="store_true")
+    production_artifact_gate.add_argument("--no-write", action="store_true")
 
     summary_chapters = sub.add_parser("build-smart-summary-chapters", help="Build chapter-level evidence and course map for smart-summary generation")
     summary_chapters.add_argument("bundle_dir")

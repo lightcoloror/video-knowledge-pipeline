@@ -13,6 +13,10 @@ from .final_reading_note import render_final_reading_note
 from .reader_export_receipt import build_reader_export_receipt, receipt_matches_reader_files
 from .long_video_memory_pack import build_long_video_memory_pack
 from .models import now_iso
+from .production_artifact_gate import (
+    evaluate_production_artifact_gate,
+    transcript_completeness_status,
+)
 from .run_artifact_registry import register_bundle_run
 from .smart_summary_codex import generate_smart_summary_with_codex, smart_summary_quality_check
 from .smart_summary_chapters import attach_content_candidate_links
@@ -81,13 +85,17 @@ def export_knowledge_note(
     material_card_markdown_path = out_dir / "content-material-card.md"
     summary_path = out_dir / "export-summary.json"
     note_title = title or str(manifest.get("title") or root.name)
-    coverage = _coverage_for_renderer(manifest, root)
     term_correction = term_correction_status(root)
     transcript_semantic_correction = transcript_semantic_correction_status(root, write=False)
     transcript_sidecar = ensure_review_transcript_sidecar(root, manifest, timeline, title=note_title, write=write)
     readable_timeline = _timeline_with_canonical_transcript(root, manifest, timeline)
     summary = _build_summary(manifest, readable_timeline)
     transcript_quality_gate = _safe_transcript_quality_gate(root, write=write)
+    production_artifact_gate = evaluate_production_artifact_gate(
+        root,
+        artifact_kind="knowledge_note_export",
+        write=write,
+    )
     speaker_review = _speaker_review(root)
     if transcript_quality_gate.get("status") not in {"unavailable", "error"}:
         manifest["transcript_quality_gate_summary"] = {
@@ -118,6 +126,12 @@ def export_knowledge_note(
         # Effective scope: reader-facing copies only; quality status remains
         # fail-closed and is still computed below.
         smart_summary_markdown = existing_smart_summary.read_text(encoding="utf-8-sig")
+    if not production_artifact_gate.get("formal_generation_allowed"):
+        smart_summary_markdown = _artifact_review_watermark(
+            smart_summary_markdown,
+            artifact_label="智能总结机器草稿",
+            gate=production_artifact_gate,
+        )
     note_markdown = render_final_reading_note(
         note_title,
         smart_summary_markdown=smart_summary_markdown,
@@ -187,6 +201,7 @@ def export_knowledge_note(
         "smart_summary_input_pack": smart_summary_input_pack,
         "long_video_memory_pack": long_video_memory_pack,
         "smart_summary_codex": smart_summary_codex_result,
+        "production_artifact_gate": production_artifact_gate,
         "term_correction": term_correction,
         "transcript_semantic_correction": transcript_semantic_correction,
         "transcript_evidence_correction_pipeline": transcript_evidence_check,
@@ -1531,17 +1546,23 @@ def _render_full_transcript(
     sidecar: dict[str, Any] | None = None,
     transcript_quality_gate: dict[str, Any] | None = None,
 ) -> str:
+    completeness = transcript_completeness_status(bundle_dir) if bundle_dir else {"passed": True}
     source_path = _full_transcript_source_path(bundle_dir, manifest or {}, sidecar or {}) if bundle_dir else None
     if source_path:
         try:
             cues = parse_transcript(source_path)
-        except Exception as exc:
+        except Exception:
             cues = []
-            source_error = str(exc)
-        else:
-            source_error = ""
         if cues:
             lines = [f"# {title} - 原始转录", ""]
+            if not completeness.get("passed"):
+                lines.extend(
+                    [
+                        "> ⚠️ 状态：`review-required`。这是机器逐字稿，不是人工校对或发布批准版本；转录质量门未通过。",
+                        f"> 阻断原因：`transcript_quality:{completeness.get('status')}`。",
+                        "",
+                    ]
+                )
             speaker_notice = _speaker_review_notice(_speaker_review(bundle_dir))
             if speaker_notice:
                 lines.extend([f"> {speaker_notice}", ""])
@@ -1550,10 +1571,36 @@ def _render_full_transcript(
     lines = [
         f"# {title} - 原始转录",
         "",
+        *(
+            [
+                "> ⚠️ 状态：`review-required`。这是机器逐字稿，不是人工校对或发布批准版本；转录质量门未通过。",
+                f"> 阻断原因：`transcript_quality:{completeness.get('status')}`。",
+                "",
+            ]
+            if not completeness.get("passed")
+            else []
+        ),
         "（未找到可用逐字稿，以下为时间线摘录。）",
         "",
     ]
     lines.extend(_full_transcript_lines(timeline))
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _artifact_review_watermark(text: str, *, artifact_label: str, gate: dict[str, Any]) -> str:
+    marker = "> ⚠️ 状态：`review-required`。"
+    if marker in text:
+        return text
+    reasons = ", ".join(str(value) for value in gate.get("blocking_reasons") or []) or "quality_review_required"
+    lines = str(text or "").splitlines()
+    insert_at = 1 if lines and lines[0].startswith("#") else 0
+    watermark = [
+        "",
+        f"{marker} 这是{artifact_label}，不可视为正式成品或发布依据。",
+        f"> 阻断原因：`{reasons}`。",
+        "",
+    ]
+    lines[insert_at:insert_at] = watermark
     return "\n".join(lines).rstrip() + "\n"
 
 

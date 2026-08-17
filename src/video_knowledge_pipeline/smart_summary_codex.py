@@ -6,10 +6,15 @@ from pathlib import Path
 from typing import Any
 
 from .artifact_freshness import build_dependency_snapshot, validate_dependency_snapshot
+from .content_profile import resolve_content_profile
 from .powershell import quote_powershell_literal as _ps_quote
 from .file_hash import sha256_file
 from .models import now_iso
 from .numeric_normalization import number_evidence_map
+from .production_artifact_gate import (
+    evaluate_production_artifact_gate,
+    transcript_completeness_status,
+)
 from .run_artifact_registry import register_bundle_run
 from .long_video_memory_pack import build_long_video_memory_pack
 from .storage import read_json, write_json
@@ -47,6 +52,16 @@ REQUIRED_HEADINGS = (
     "## 高频话术",
     "## 待复核点",
 )
+INTERVIEW_REQUIRED_HEADINGS = (
+    "## 基本信息",
+    "## 一句话概览",
+    "## 核心主题 / 事实主线",
+    "## 事实时间线",
+    "## 受访者原话与感受",
+    "## 明确后续事项",
+    "## 原话摘录",
+    "## 待核实事项 / 隐私与发布边界",
+)
 BAD_OVERVIEW_FRAGMENTS = ("所以啊、", "如说、", "一下这个", "一个共同点就", "customer、", "方案、customer")
 EVIDENCE_BOUNDARY = (
     "> 证据边界：本总结仅依据已入库的文本、时间轴与视觉证据；"
@@ -70,6 +85,25 @@ def generate_smart_summary_with_codex(
     """
 
     root = Path(bundle_dir).expanduser().resolve()
+    production_gate = evaluate_production_artifact_gate(
+        root,
+        artifact_kind="smart_summary",
+        write=write,
+    )
+    if input_md and not production_gate.get("formal_generation_allowed"):
+        return {
+            "schema": SCHEMA,
+            "bundle_dir": str(root),
+            "status": "blocked_by_production_artifact_gate",
+            "ok": False,
+            "installed_from": "",
+            "production_artifact_gate": production_gate,
+            "quality": {"passed": False, "status": "blocked_review_required"},
+            "next_actions": [
+                "Resolve production-artifact-gate.md before installing a formal Smart Summary.",
+                "Keep any unreviewed output under a visibly watermarked machine-draft filename.",
+            ],
+        }
     exports = root / "exports"
     prompt_path = exports / "smart-summary-codex-prompt.md"
     target = exports / "smart-summary.codex.md"
@@ -178,8 +212,30 @@ def run_smart_summary_llm_rewrite(
 
     root = Path(bundle_dir).expanduser().resolve()
     exports = root / "exports"
+    production_gate = evaluate_production_artifact_gate(
+        root,
+        artifact_kind="smart_summary",
+        write=write,
+    )
+    if execute and not production_gate.get("formal_generation_allowed"):
+        result = {
+            "schema": "video_knowledge_pipeline.smart_summary_llm_rewrite_run.v1",
+            "bundle_dir": str(root),
+            "execute": True,
+            "status": "blocked_by_production_artifact_gate",
+            "ok": False,
+            "production_artifact_gate": production_gate,
+            "provider_call_performed": False,
+            "next_actions": ["Resolve production-artifact-gate.md; no Provider call was made."],
+        }
+        return _write_llm_run_result(root, result, write=write)
     cfg = resolve_text_provider_config(provider_config)
     title = _smart_summary_title(root)
+    content_profile = resolve_content_profile(root)
+    interview_profile = content_profile.get("profile_id") in {
+        "interview-v1",
+        "medical-insurance-interview-v1",
+    }
     handoff = prepare_smart_summary_llm_rewrite(root, provider=str(cfg.get("provider") or "openai_compatible"), write=write)
     prompt_path = Path(str(handoff.get("prompt_path") or exports / "smart-summary-llm-rewrite-pack.md"))
     output_path = exports / "smart-summary.llm.md"
@@ -188,7 +244,11 @@ def run_smart_summary_llm_rewrite(
     messages = [
         {
             "role": "system",
-            "content": "你是视频课程智能总结编辑器。必须输出可直接保存的 Markdown 成品，不要解释过程，不要包代码块。分段时间请统一使用 HH:MM:SS。必须保留不确定性边界，不要编造视觉证据。",
+            "content": (
+                "你是采访事实摘要编辑器。必须忠实区分采访者与受访者，只写事实时间线、原话与感受、已确认信息、待核实事项和隐私发布边界；不得把个人医疗保险经历扩写为建议、方法论、高频话术或可复用表达。输出 Markdown，不要编造视觉证据。"
+                if interview_profile
+                else "你是视频课程智能总结编辑器。必须输出可直接保存的 Markdown 成品，不要解释过程，不要包代码块。分段时间请统一使用 HH:MM:SS。必须保留不确定性边界，不要编造视觉证据。"
+            ),
         },
         {"role": "user", "content": prompt_text},
     ]
@@ -737,6 +797,12 @@ def smart_summary_quality_check(
         # The installed section/global-reduce artifact is the final candidate.
         path = codex_summary if codex_summary.is_file() else legacy_summary
     text = path.read_text(encoding="utf-8-sig") if path.exists() else ""
+    content_profile = resolve_content_profile(root)
+    interview_profile = content_profile.get("profile_id") in {
+        "interview-v1",
+        "medical-insurance-interview-v1",
+    }
+    required_headings = INTERVIEW_REQUIRED_HEADINGS if interview_profile else REQUIRED_HEADINGS
     transcript_max = _transcript_max_seconds(root)
     summary_times = _timestamps(text)
     checks: list[dict[str, Any]] = []
@@ -745,7 +811,7 @@ def smart_summary_quality_check(
     is_codex = _is_codex_summary(path, text)
     checks.append(_check("exists", path.exists() and bool(text.strip()), f"summary_path={path}"))
     checks.append(_check("codex_final", (not require_codex or is_codex) and not is_draft, "requires codex_final or codex_llm_rewrite_final marker"))
-    checks.append(_check("required_headings", all(heading in text for heading in REQUIRED_HEADINGS), "required GetBrain-style sections are present"))
+    checks.append(_check("required_headings", all(heading in text for heading in required_headings), f"required sections for {content_profile.get('profile_id')} are present"))
     term_gate = load_term_correction_impact_gate(root)
     checks.append(_check("term_correction_impact", bool(term_gate.get("passed")), str(term_gate.get("detail") or "")))
     semantic_gate = _semantic_correction_quality_gate(root)
@@ -772,7 +838,7 @@ def smart_summary_quality_check(
     overview_ok = 35 <= len(overview_line) <= 260 and not any(fragment in overview_line for fragment in BAD_OVERVIEW_FRAGMENTS)
     checks.append(_check("overview_readable", overview_ok, overview_line[:180]))
 
-    segment_text = _section_text(text, "## 分段总结")
+    segment_text = _section_text(text, "## 事实时间线" if interview_profile else "## 分段总结")
     long_paragraphs = [para for para in re.split(r"\n\s*\n", segment_text) if len(para.strip()) > 900]
     checks.append(_check("segment_not_asr_dump", not long_paragraphs, f"long_paragraphs={len(long_paragraphs)}"))
 
@@ -795,13 +861,13 @@ def smart_summary_quality_check(
         )
     )
 
-    section_coverage = _section_coverage(text, transcript_max)
+    section_coverage = _section_coverage(text, transcript_max, interview_profile=interview_profile)
     checks.append(_check("balanced_sections", section_coverage["passed"], section_coverage["detail"]))
     visual_boundary = "视觉" in text and ("未执行" in text or "待复核" in text or "未可靠" in text)
     checks.append(_check("visual_boundary", visual_boundary, "must preserve visual evidence not executed / needs review boundary"))
 
     transcript_text = _quality_transcript_text(transcript_source_gate)
-    summary_body = _quality_summary_body(text)
+    summary_body = _quality_summary_body(text, interview_profile=interview_profile)
     # Intent: validate reader structure against the same Markdown the reader receives.
     # Decision: pass the full summary to the semantic gate; keep summary_body for metrics.
     # Reason: _quality_summary_body removes headings required by the semantic parser.
@@ -1824,79 +1890,7 @@ def _summary_transcript_completeness_gate(root: Path) -> dict[str, Any]:
     and transcript artifacts are never overwritten.
     """
 
-    path = root / "transcript-quality-gate.json"
-    if not path.is_file():
-        return {
-            "passed": True,
-            "status": "not_available_legacy_compatible",
-            "path": str(path),
-            "detail": "transcript quality artifact is absent; legacy behavior preserved",
-        }
-    try:
-        value = read_json(path)
-    except Exception as exc:
-        return {
-            "passed": False,
-            "status": "invalid",
-            "path": str(path),
-            "detail": f"transcript quality artifact is unreadable: {exc}",
-        }
-    if not isinstance(value, dict):
-        return {
-            "passed": False,
-            "status": "invalid",
-            "path": str(path),
-            "detail": "transcript quality artifact is not a JSON object",
-        }
-    status = str(value.get("status") or "").strip().lower()
-    completeness = (
-        value.get("source_completeness")
-        if isinstance(value.get("source_completeness"), dict)
-        else {}
-    )
-    completeness_status = str(completeness.get("status") or "").strip().lower()
-    verified = completeness.get("speech_completeness_verified")
-    failed = (
-        status == "failed"
-        or value.get("ok") is False
-        or int(value.get("fail_count") or 0) > 0
-        or completeness_status == "failed"
-    )
-    if failed:
-        return {
-            "passed": False,
-            "status": "failed",
-            "path": str(path),
-            "transcript_quality_status": status,
-            "source_completeness_status": completeness_status,
-            "speech_completeness_verified": verified,
-            "detail": (
-                f"transcript quality is incomplete: status={status}; "
-                f"source_completeness={completeness_status}; verified={verified}"
-            ),
-        }
-    if completeness.get("applicable") is True and verified is not True:
-        return {
-            "passed": False,
-            "status": "unverified",
-            "path": str(path),
-            "transcript_quality_status": status,
-            "source_completeness_status": completeness_status,
-            "speech_completeness_verified": verified,
-            "detail": (
-                "transcript speech completeness is not independently verified; "
-                "timeline span alone is insufficient"
-            ),
-        }
-    return {
-        "passed": True,
-        "status": "verified" if verified is True else status or "passed",
-        "path": str(path),
-        "transcript_quality_status": status,
-        "source_completeness_status": completeness_status,
-        "speech_completeness_verified": verified,
-        "detail": "transcript quality evidence does not expose an unresolved speech gap",
-    }
+    return transcript_completeness_status(root)
 
 
 def _quality_transcript_text(source_gate: dict[str, Any]) -> str:
@@ -1913,8 +1907,12 @@ def _quality_transcript_text(source_gate: dict[str, Any]) -> str:
     return " ".join(str(cue.text or "") for cue in cues).strip()
 
 
-def _quality_summary_body(text: str) -> str:
-    headings = ("## 一句话概览", "## 核心主题", "## 分段总结", "## 关键观点", "## 可执行动作清单", "## 高频话术")
+def _quality_summary_body(text: str, *, interview_profile: bool = False) -> str:
+    headings = (
+        ("## 一句话概览", "## 核心主题", "## 事实时间线", "## 受访者原话与感受", "## 明确后续事项", "## 原话摘录")
+        if interview_profile
+        else ("## 一句话概览", "## 核心主题", "## 分段总结", "## 关键观点", "## 可执行动作清单", "## 高频话术")
+    )
     return "\n".join(_section_text(text, heading) for heading in headings)
 
 
@@ -2348,9 +2346,14 @@ def _section_text(text: str, heading: str) -> str:
     return text[start + len(heading) : start + len(heading) + next_match.start()]
 
 
-def _section_coverage(text: str, transcript_max: float) -> dict[str, Any]:
+def _section_coverage(text: str, transcript_max: float, *, interview_profile: bool = False) -> dict[str, Any]:
     if transcript_max <= 0:
         return {"passed": False, "detail": "missing transcript duration"}
+    if interview_profile:
+        times = _timestamps(_section_text(text, "## 事实时间线"))
+        buckets = {min(3, int((value / transcript_max) * 4)) for value in times if value >= 0}
+        passed = len(buckets) >= 3 and bool(times) and max(times) >= transcript_max * 0.75
+        return {"passed": passed, "detail": f"## 事实时间线:{sorted(buckets)}"}
     details = []
     passed = True
     for heading in ("## 关键观点", "## 可执行动作清单", "## 高频话术"):
