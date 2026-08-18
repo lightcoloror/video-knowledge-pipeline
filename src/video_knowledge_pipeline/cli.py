@@ -92,6 +92,11 @@ from .local_media_progress import stderr_progress_callback
 from .local_asr_service_adapter import plan_local_asr_service_run, run_local_asr_service_plan
 from .local_vlm_server_adapter import local_vlm_adapter_plan, local_vlm_serving_smoke
 from .long_video_memory_pack import build_long_video_memory_pack
+from .long_video_fast_segment import (
+    apply_long_video_fast_segment_review,
+    build_long_video_fast_segment_plan,
+    render_long_video_fast_segment,
+)
 from .media_capability_registry import media_capability_registry_status
 from .highlight_detection_adapter import run_highlight_detection
 from .media_connector_consent import media_connector_preflight
@@ -1596,6 +1601,34 @@ def main(argv: list[str] | None = None) -> int:
             candidate_pack_json=args.candidate_pack_json or None,
             write=not args.no_write,
         )
+    elif args.command == "long-video-fast-segment-plan":
+        result = build_long_video_fast_segment_plan(
+            args.bundle_dir,
+            media_path=args.media_path or None,
+            transcript_path=args.transcript_path or None,
+            vad_path=args.vad_path or None,
+            profile=args.profile,
+            long_silence_seconds=args.long_silence_seconds,
+            edge_blank_seconds=args.edge_blank_seconds,
+            repeat_similarity=args.repeat_similarity,
+            write=not args.no_write,
+        )
+    elif args.command == "apply-long-video-fast-segment-review":
+        result = apply_long_video_fast_segment_review(
+            args.bundle_dir,
+            args.review_json,
+            plan_json=args.plan_json or None,
+            write=not args.no_write,
+        )
+    elif args.command == "render-long-video-fast-segment":
+        result = render_long_video_fast_segment(
+            args.bundle_dir,
+            approved_json=args.approved_json or None,
+            output_path=args.output_path or None,
+            execute=args.execute,
+            timeout_seconds=args.timeout_seconds,
+            write=not args.no_write,
+        )
     elif args.command == "video-evidence-query-plan":
         result = build_video_evidence_query_plan(
             args.bundle_dir,
@@ -2607,6 +2640,9 @@ def _mcp_callables() -> dict[str, Any]:
         "script_clip_alignment_check": check_script_clip_alignment,
         "content_clip_candidate_pack": build_content_clip_candidate_pack,
         "content_clip_alignment_check": check_content_clip_alignment,
+        "long_video_fast_segment_plan": build_long_video_fast_segment_plan,
+        "apply_long_video_fast_segment_review": apply_long_video_fast_segment_review,
+        "render_long_video_fast_segment": render_long_video_fast_segment,
         "video_evidence_query_plan": build_video_evidence_query_plan,
         "apply_video_evidence_confirmation": apply_video_evidence_confirmation,
         "video_rag_service_plan": video_rag_service_plan,
@@ -2750,6 +2786,7 @@ _MCP_TOOL_BY_MANIFEST_KEY = {
     "mcp_script_clip_alignment_check_args": "script_clip_alignment_check",
     "mcp_content_clip_candidate_pack_args": "content_clip_candidate_pack",
     "mcp_content_clip_alignment_check_args": "content_clip_alignment_check",
+    "mcp_long_video_fast_segment_plan_args": "long_video_fast_segment_plan",
     "mcp_video_rag_service_plan_args": "video_rag_service_plan",
     "mcp_prepare_transcript_edit_session_args": "prepare_transcript_edit_session",
     "mcp_apply_transcript_edits_args": "apply_transcript_edits",
@@ -4305,6 +4342,40 @@ def build_parser() -> argparse.ArgumentParser:
     content_clip_alignment.add_argument("fine_cut_plan_json")
     content_clip_alignment.add_argument("--candidate-pack-json", default="")
     content_clip_alignment.add_argument("--no-write", action="store_true")
+
+    long_video_plan = sub.add_parser(
+        "long-video-fast-segment-plan",
+        help="Build a local, review-only content-aware removal plan for a very long video",
+    )
+    long_video_plan.add_argument("bundle_dir")
+    long_video_plan.add_argument("--media-path", default="")
+    long_video_plan.add_argument("--transcript-path", default="")
+    long_video_plan.add_argument("--vad-path", default="")
+    long_video_plan.add_argument("--profile", choices=["auto", "lecture", "interview", "meeting", "tutorial", "vlog"], default="auto")
+    long_video_plan.add_argument("--long-silence-seconds", type=float, default=4.0)
+    long_video_plan.add_argument("--edge-blank-seconds", type=float, default=8.0)
+    long_video_plan.add_argument("--repeat-similarity", type=float, default=0.92)
+    long_video_plan.add_argument("--no-write", action="store_true")
+
+    long_video_review = sub.add_parser(
+        "apply-long-video-fast-segment-review",
+        help="Apply explicit keep/drop decisions to the current long-video plan without editing media",
+    )
+    long_video_review.add_argument("bundle_dir")
+    long_video_review.add_argument("review_json")
+    long_video_review.add_argument("--plan-json", default="")
+    long_video_review.add_argument("--no-write", action="store_true")
+
+    long_video_render = sub.add_parser(
+        "render-long-video-fast-segment",
+        help="Preview or explicitly execute a new-copy-only FFmpeg render from a human-approved plan",
+    )
+    long_video_render.add_argument("bundle_dir")
+    long_video_render.add_argument("--approved-json", default="")
+    long_video_render.add_argument("--output-path", default="")
+    long_video_render.add_argument("--execute", action="store_true")
+    long_video_render.add_argument("--timeout-seconds", type=int, default=14400)
+    long_video_render.add_argument("--no-write", action="store_true")
 
     evidence_query = sub.add_parser("video-evidence-query-plan", help="Build a local coarse-to-fine evidence review plan")
     evidence_query.add_argument("bundle_dir")

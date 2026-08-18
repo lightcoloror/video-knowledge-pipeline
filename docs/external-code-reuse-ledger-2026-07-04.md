@@ -1989,6 +1989,15 @@ At the time recorded above, every untracked `src/video_knowledge_pipeline/*.py` 
 | Moyf/moys-asr-workflow editor timing | `949bc84058cdae1d9c021c50203e6d2742f9392c` / AGPL-3.0 | **existing integration reused** | 意图：让人工可在安全范围内调整边界；决策：继续复用已集成 editor-utils/Waveform 时间交互，不复制新算法；理由：成熟 UI 已有撤销、吸附和 split/merge；证据：本轮再跑 64/64；生效范围：审核交互语义；回滚：使用 JSON review notes。 |
 | WhisperX interval/speaker provenance | `5f2f9d4320dd93a7d12f5ba2495eef7e0a5af963` / BSD-4-Clause | **contract adapted / no code copied** | 意图：保留词与匿名 speaker 对齐边界；决策：只消费 VKP 已有 timestamps/speaker lineage；理由：不应在片段层重跑 diarization；证据：实际读取 `whisperx/diarize.py`；生效范围：候选来源与 speaker 门；回滚：退回 segment 边界并标记 unavailable。 |
 | AutoShot technical shots | `77c82ff826a9301bb173d9be786297a49d73d081` / MIT | **existing adapter reused** | 意图：为动作/B-roll 提供真实镜头边界；决策：只消费 `technical_shot_boundaries.v1`；理由：禁止第二次解码和模型推理；证据：本地固定源码、32 视频 GPU benchmark 与 strict loader；生效范围：source shot IDs 和边界；回滚：缺证据时 fail-closed。 |
+
+### 超长视频内容感知快速分段（2026-08-18）
+
+| 来源/模块 | 固定证据 | 状态 | 意图 / 决策 / 理由 / 证据 / 生效范围 / 回滚 |
+|---|---|---|---|
+| videocut-kit | `b07990f9e57e6eeb801887fa3e36af5c8450ae68` | **existing invariants reused / implemented** | 意图：复用成熟边界吸附、人工确认和一致性门；决策：继续使用 VKP 已适配的 review pack 概念，不复制其 pipeline、状态机或 FFmpeg 编排；理由：避免第二套剪辑管线；证据：现有源码映射与回归；生效范围：review-only 计划与 approved sidecar；回滚：删除新增派生入口。 |
+| FunASR FSMN-VAD + faster-whisper Silero VAD | `516c4f770496a5cbb89c8e2e447211bbb7b0db71` / installed `faster-whisper 1.1.1` | **existing evidence reused / implemented** | 意图：快速定位长静音和边缘空白；决策：只读取当前 Bundle 已完成 VAD sidecar，不在该命令加载模型；理由：超长视频计划必须快且可恢复；证据：既有 VAD/活动审计与 2026-07-23 实施记录；生效范围：删除候选，不改权威 VAD；回滚：不提供 VAD 即降级为人工复核。 |
+| AutoShot/PySceneDetect/OmniShotCut technical shots | AutoShot `77c82ff826a9301bb173d9be786297a49d73d081` | **existing contract reused / implemented** | 意图：保护无对白但有独有画面的内容；决策：只读 `technical_shot_boundaries.v1` 与 Timeline/OCR；理由：音频空白不等于视觉无意义；证据：固定 32 视频边界 benchmark 与 strict loader；生效范围：候选置信度降级；回滚：证据缺失时默认保留。 |
+| VKP single FFmpeg outlet | `video_creation_pipeline.single_ffmpeg_outlet` | **existing receipt reused / implemented** | 意图：人工确认后输出新副本；决策：显式 `--execute`、CPU 精确重编码、无 fallback，完成后复用 `ffmpeg_execution_receipt.v1`；理由：保持一个 FFmpeg 真正出口并记录实际 argv；证据：本地 fake execution/receipt/QA 回归；生效范围：新文件，不改原片；回滚：删除新副本与派生回执。 |
 | Shot2Story layered task contract | `ae26ac3d2f9e9a91a7fd0653bfb6a2b3cb250308` / Apache-2.0 | **design contract adapted / no code copied** | 意图：先逐证据定位，再形成故事节拍范围；决策：story beat 只读取既有 ASR/visual/shot 证据；理由：不把整段 VLM 当时间真源；证据：实际读取上游任务结构；生效范围：`story-beat-v1` profile；回滚：移除该 profile。 |
 
 明确拒绝：第二套 Provider SDK、VideoRAG/embedding 索引、FFmpeg/ASR/OCR/模型执行器、静默 fallback、整段视频上传、自动剪片、自动真人身份认定和自动发布。没有固定源码和本地 smoke 的网页搜索候选保持未集成状态。完整五字段记录见 `docs/content-clip-retrieval-and-alignment-v1-2026-08-16.md`。

@@ -628,6 +628,9 @@ def test_export_video_workbench_writes_static_workspace() -> None:
     assert "video_edit_review_pack_markdown" in artifact_keys
     assert "video_edit_artifact_validation" in artifact_keys
     assert "video_edit_storyboard_candidates" in artifact_keys
+    assert "long_video_fast_segment_plan_markdown" in artifact_keys
+    assert "long_video_fast_segment_approved_json" in artifact_keys
+    assert "long_video_fast_segment_render_receipt" in artifact_keys
     assert "term_correction_impact_report_markdown" in artifact_keys
     assert "term_arbitration_codex_result_codex_markdown" in artifact_keys
     assert "term_correction_closure_markdown" in artifact_keys
