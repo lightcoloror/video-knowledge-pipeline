@@ -1,0 +1,76 @@
+{
+  "schema": "video_knowledge_pipeline.implementation_completion.v1",
+  "dispatch_id": "VKP-QWEN-RECOVERABLE-WINDOWS-20260818-01",
+  "task_id": "20260818191138-62ca97",
+  "goal_status": "complete",
+  "codex_acceptance_status": "implemented_not_accepted",
+  "generated_at": "2026-08-18T19:47:19+08:00",
+  "acting_agent": "vkp-implementation-agent",
+  "base_commit": "31b7e437aaf86fce17e265dbcd16a4ff38f9de00",
+  "implementation_parent_commit": "eaa4f27de592958d79dd7a3611e7d5b3cab91045",
+  "implementation_commit": "this_selective_commit_hash_is_returned_out_of_band",
+  "completed_scope": [
+    "Deterministic fixed-duration source-window planning",
+    "Single-window FFmpeg extraction without sibling deletion or silent retry",
+    "Lazy Qwen extraction after checkpoint-success filtering",
+    "Per-window extraction and transcription failure checkpointing with bounded attempts",
+    "Exact source-window timestamp offset applied once",
+    "Window-plan revision binding with bounded legacy checkpoint compatibility",
+    "Complete-checkpoint recovery and byte-stable top-level rerun compatibility"
+  ],
+  "changed_paths": [
+    "agents/vkp-implementation-agent/handoff/20260818191138-62ca97/context.md",
+    "agents/vkp-implementation-agent/handoff/20260818191138-62ca97/outputs/completion-receipt.json",
+    "docs/asr-silence-snapped-chunk-manifest-2026-07-28.md",
+    "docs/receipts/VKP-QWEN-RECOVERABLE-WINDOWS-20260818-01.completion-receipt.json",
+    "src/video_knowledge_pipeline/asr_execution.py",
+    "src/video_knowledge_pipeline/audio_chunk_manifest.py",
+    "src/video_knowledge_pipeline/qwen3_asr_python_runner.py",
+    "tests/test_asr_plan_checkpoint_resume.py",
+    "tests/test_audio_chunk_manifest.py",
+    "tests/test_local_media_resilience.py",
+    "tests/test_qwen_recoverable_windows.py"
+  ],
+  "verification": {
+    "red": {
+      "run_id": "codex-test-13300-4a27104a3df4444494b5e380925525c4",
+      "result": "3 failed as expected before implementation"
+    },
+    "focused_green": {
+      "run_id": "codex-test-46892-807427ad9afc4e0b8df980b52d77c74c",
+      "result": "3 passed"
+    },
+    "associated": {
+      "run_id": "codex-test-36592-44b2234285ee40f0a346e8c2106e3a57",
+      "result": "47 passed"
+    },
+    "combined_final": {
+      "run_id": "codex-test-54684-7d691c2db7584006baa84add272f5b83",
+      "result": "53 passed"
+    },
+    "ruff": "passed",
+    "python_ast": "7 files parsed",
+    "git_diff_check": "passed",
+    "json_validation": "passed before selective commit",
+    "sensitive_diff_scan": "passed before selective commit"
+  },
+  "warnings": [
+    "Managed pytest reports one existing unknown cache_dir configuration warning.",
+    "The active requests installation reports an existing third-party dependency version warning.",
+    "A post-review run exposed a shared FunASR compatibility import; the helper was restored and the final 53-test rerun passed."
+  ],
+  "blockers": [],
+  "privacy_and_execution_boundary": {
+    "synthetic_fixtures_only": true,
+    "real_media_used": false,
+    "model_inference_or_download": false,
+    "provider_called": false,
+    "network_used": false,
+    "upload_or_publication": false,
+    "configuration_changed": false,
+    "push_performed": false
+  },
+  "state_ownership": "qwen3_asr_python_runner checkpoint remains the only Qwen window execution state owner",
+  "rollback": "Revert this selective implementation commit; legacy checkpoint fields and canonical transcripts require no migration.",
+  "review_required": true
+}

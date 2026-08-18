@@ -47,18 +47,36 @@ def _install_fake_qwen_runtime(monkeypatch: pytest.MonkeyPatch, *, fail_chunk: i
     monkeypatch.setitem(sys.modules, "torch", torch)
     monkeypatch.setitem(sys.modules, "qwen_asr", qwen_asr)
 
-    def fake_chunks(media: Path, output_dir: Path, *, chunk_seconds: int) -> list[Path]:
-        rows = []
-        for index in range(3):
-            path = output_dir / f"chunk-{index:04d}.wav"
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(f"chunk-{index}".encode("ascii"))
-            rows.append(path)
-        return rows
+    def fake_extract(
+        media: Path,
+        output_dir: Path,
+        *,
+        index: int,
+        start_seconds: float,
+        end_seconds: float,
+        ffmpeg_path=None,
+        timeout_seconds: int = 900,
+    ) -> dict:
+        path = output_dir / f"chunk-{index:04d}.wav"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(f"chunk-{index}".encode("ascii"))
+        return {
+            "index": index,
+            "path": str(path),
+            "bytes": path.stat().st_size,
+            "start_seconds": start_seconds,
+            "end_seconds": end_seconds,
+            "duration_seconds": end_seconds - start_seconds,
+            "command": ["synthetic-ffmpeg", str(path)],
+        }
 
     monkeypatch.setattr(
-        "video_knowledge_pipeline.qwen3_asr_python_runner._audio_chunks",
-        fake_chunks,
+        "video_knowledge_pipeline.qwen3_asr_python_runner.extract_audio_chunk_window",
+        fake_extract,
+    )
+    monkeypatch.setattr(
+        "video_knowledge_pipeline.qwen3_asr_python_runner._media_duration_seconds",
+        lambda _media: 90.0,
     )
     monkeypatch.setattr(
         "video_knowledge_pipeline.qwen3_asr_python_runner._model_ready",

@@ -23,4 +23,4 @@ One window extraction/transcription failure must be checkpointed and must not re
 
 ## Status
 
-pending
+completed

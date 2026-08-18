@@ -9,6 +9,46 @@ import video_knowledge_pipeline.audio_chunk_manifest as chunking
 import video_knowledge_pipeline.funasr_chunked_runner as runner
 
 
+def test_fixed_chunk_boundaries_keep_exact_final_window() -> None:
+    assert chunking.fixed_chunk_boundaries(65, 30) == [
+        (0.0, 30.0),
+        (30.0, 60.0),
+        (60.0, 65.0),
+    ]
+
+
+def test_single_window_extraction_failure_preserves_sibling_artifact(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    media = tmp_path / "synthetic-input.wav"
+    media.write_bytes(b"synthetic-media")
+    output = tmp_path / "chunks"
+    output.mkdir()
+    sibling = output / "chunk-0000.wav"
+    sibling.write_bytes(b"completed-window")
+
+    monkeypatch.setattr(
+        chunking.subprocess,
+        "run",
+        lambda command, **_kwargs: subprocess.CompletedProcess(
+            command, 1, "", "synthetic decode failure"
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="chunk_index=1; returncode=1"):
+        chunking.extract_audio_chunk_window(
+            media,
+            output,
+            index=1,
+            start_seconds=30,
+            end_seconds=60,
+            ffmpeg_path=tmp_path / "ffmpeg.exe",
+        )
+
+    assert sibling.read_bytes() == b"completed-window"
+
+
 def test_subtitle_edit_boundaries_fall_back_to_even_split() -> None:
     assert chunking.compute_silence_adjusted_boundaries(120, 3, []) == [
         (0.0, 40.0),

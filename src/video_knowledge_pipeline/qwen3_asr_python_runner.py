@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -12,8 +13,10 @@ import tempfile
 from pathlib import Path
 from typing import Any, Callable
 
+from .audio_chunk_manifest import extract_audio_chunk_window, fixed_chunk_boundaries
+from .canonical_json import canonical_json_sha256
 from .local_media_progress import LocalMediaProgress, stderr_progress_callback
-from .media_tools import resolve_media_tool
+from .media_tools import local_tool_subprocess_env, resolve_media_tool
 from .asr_runner import _model_ready
 from .storage import read_json, write_json
 
@@ -143,10 +146,29 @@ def run_qwen3_asr(
         payload = _failure(output, "qwen3_asr_runtime_failed", str(exc), model=model)
         return _finalize_payload(payload, output, report_path, progress)
 
-    rows: list[dict[str, Any]] = []
-    failed_chunks: list[dict[str, Any]] = []
     chunk_duration = max(30, int(chunk_seconds or 300))
     attempt_limit = max(1, int(max_chunk_attempts or 1))
+    selected_indexes = sorted(set(chunk_indexes or []))
+    try:
+        media_duration = _media_duration_seconds(media)
+        boundaries = fixed_chunk_boundaries(media_duration, chunk_duration)
+        missing = sorted(set(selected_indexes) - set(range(len(boundaries))))
+        if missing:
+            raise ValueError(f"requested chunk indexes not found: {missing}")
+        planned_windows = [
+            (index, start, end)
+            for index, (start, end) in enumerate(boundaries)
+            if not selected_indexes or index in selected_indexes
+        ]
+        window_plan_revision = qwen_window_plan_revision(
+            media=media,
+            chunk_seconds=chunk_duration,
+            boundaries=boundaries,
+        )
+    except Exception as exc:
+        payload = _failure(output, "qwen3_asr_chunking_failed", str(exc), model=model)
+        return _finalize_payload(payload, output, report_path, progress)
+
     execution_contract = qwen_checkpoint_execution_contract(
         media=media,
         model=model,
@@ -157,6 +179,7 @@ def run_qwen3_asr(
         max_new_tokens=max_new_tokens,
         dtype_name=dtype_name,
         chunk_indexes=chunk_indexes,
+        window_plan_revision=window_plan_revision,
     )
     checkpoint = _load_checkpoint(
         checkpoint_path,
@@ -169,36 +192,34 @@ def run_qwen3_asr(
         max_new_tokens=max_new_tokens,
         dtype_name=dtype_name,
         chunk_indexes=chunk_indexes,
+        window_plan_revision=window_plan_revision,
         resume=resume,
     )
-    rows = checkpoint["results"]
-    failed_chunks = checkpoint["failed_chunks"]
+    rows: list[dict[str, Any]] = checkpoint["results"]
+    failed_chunks: list[dict[str, Any]] = checkpoint["failed_chunks"]
     resumed_from_checkpoint = bool(checkpoint["resumed"])
-    selected_indexes = sorted(set(chunk_indexes or []))
+    requested_chunk_count = len(planned_windows)
     try:
-        progress.emit(stage="chunking", percent=10, message=f"Splitting media into {chunk_duration}-second chunks")
+        progress.emit(
+            stage="chunking",
+            percent=10,
+            message=f"Planning {requested_chunk_count} recoverable audio windows",
+        )
         with tempfile.TemporaryDirectory(prefix="vkp-qwen3-asr-") as temp_dir:
-            chunks = _audio_chunks(media, Path(temp_dir), chunk_seconds=chunk_duration)
-            indexed_chunks = [(_chunk_index(path), path) for path in chunks]
-            if selected_indexes:
-                indexed_chunks = [row for row in indexed_chunks if row[0] in selected_indexes]
-                missing = sorted(set(selected_indexes) - {row[0] for row in indexed_chunks})
-                if missing:
-                    raise ValueError(f"requested chunk indexes not found: {missing}")
-            requested_chunk_count = len(indexed_chunks)
             completed_indexes = {int(row.get("chunk_index") or 0) for row in rows}
+            pending_windows = [
+                row for row in planned_windows if row[0] not in completed_indexes
+            ]
             if completed_indexes:
-                indexed_chunks = [row for row in indexed_chunks if row[0] not in completed_indexes]
                 progress.emit(stage="resume", percent=10, message=f"Resuming after {len(completed_indexes)} checkpointed chunks")
-            total = len(indexed_chunks)
+            total = len(pending_windows)
             failed_dir = output.with_name(f"{output.stem}-failed-chunks")
-            for current, (chunk_index, chunk) in enumerate(indexed_chunks, start=1):
+            for current, (chunk_index, start, end) in enumerate(pending_windows, start=1):
                 previous_failure = next(
-                    (row for row in failed_chunks if int(row.get("chunk_index") or -1) == chunk_index),
+                    (row for row in failed_chunks if int(row.get("chunk_index", -1)) == chunk_index),
                     None,
                 )
                 previous_attempt_count = int((previous_failure or {}).get("attempt_count") or 0)
-                offset = float(chunk_index * chunk_duration)
                 if previous_failure and (bool(previous_failure.get("retry_exhausted")) or previous_attempt_count >= attempt_limit):
                     progress.emit(
                         stage="retry_exhausted",
@@ -209,11 +230,81 @@ def run_qwen3_asr(
                         details={"chunk_index": chunk_index, "attempt_count": previous_attempt_count, "max_chunk_attempts": attempt_limit},
                     )
                     continue
-                failed_chunks = [row for row in failed_chunks if int(row.get("chunk_index") or -1) != chunk_index]
+                failed_chunks = [
+                    row
+                    for row in failed_chunks
+                    if int(row.get("chunk_index", -1)) != chunk_index
+                ]
                 attempt_count = previous_attempt_count + 1
                 progress.emit(
-                    stage="transcription",
+                    stage="extraction",
                     percent=10 + (80 * (current - 1) / max(1, total)),
+                    current_item=current,
+                    total_items=total,
+                    message=f"Extracting chunk {chunk_index}",
+                )
+                retry = _retry_command(
+                    media=media,
+                    output=output.with_name(f"{output.stem}-retry-chunk-{chunk_index:04d}.json"),
+                    model=model,
+                    forced_aligner=forced_aligner,
+                    language=language,
+                    device=device,
+                    max_new_tokens=max_new_tokens,
+                    dtype_name=dtype_name,
+                    chunk_seconds=chunk_duration,
+                    chunk_index=chunk_index,
+                )
+                try:
+                    extracted = extract_audio_chunk_window(
+                        media,
+                        Path(temp_dir),
+                        index=chunk_index,
+                        start_seconds=start,
+                        end_seconds=end,
+                    )
+                    chunk = Path(str(extracted["path"]))
+                except Exception as exc:
+                    failed_chunks.append(
+                        {
+                            "chunk_index": chunk_index,
+                            "start": float(start),
+                            "end": float(end),
+                            "reason": "chunk_extraction_failed",
+                            "detail": str(exc),
+                            "artifact_path": "",
+                            "artifact_copy_error": "",
+                            "retry_command": retry,
+                            "attempt_count": attempt_count,
+                            "retry_exhausted": attempt_count >= attempt_limit,
+                        }
+                    )
+                    failed_chunks.sort(key=lambda row: int(row.get("chunk_index", -1)))
+                    _write_checkpoint(
+                        checkpoint_path,
+                        media=media,
+                        model=model,
+                        chunk_seconds=chunk_duration,
+                        forced_aligner=forced_aligner,
+                        language=language,
+                        results=rows,
+                        failed_chunks=failed_chunks,
+                        requested_chunk_count=requested_chunk_count,
+                        execution_contract=execution_contract,
+                    )
+                    progress.emit(
+                        stage="extraction_failed",
+                        percent=10 + (80 * current / max(1, total)),
+                        current_item=current,
+                        total_items=total,
+                        message=f"Failed chunk {chunk_index} extraction; continuing",
+                        details={"chunk_index": chunk_index, "failed_chunks": len(failed_chunks)},
+                    )
+                    continue
+
+                progress.emit(
+                    stage="transcription",
+                    percent=10 + (80 * (current - 0.5) / max(1, total)),
                     current_item=current,
                     total_items=total,
                     message=f"Transcribing chunk {chunk_index}",
@@ -231,18 +322,21 @@ def run_qwen3_asr(
                         raise RuntimeError("empty_asr_result")
                     for value_index, value in enumerate(values, start=1):
                         text = str(getattr(value, "text", "") or "").strip()
-                        timestamps = _offset_timestamps(_timestamps(getattr(value, "time_stamps", None)), offset)
+                        timestamps = _offset_timestamps(
+                            _timestamps(getattr(value, "time_stamps", None)),
+                            float(start),
+                        )
                         rows.append(
                             {
                                 "chunk_index": chunk_index,
-                                "chunk_offset_seconds": offset,
+                                "chunk_offset_seconds": float(start),
                                 "text": text,
                                 "language": str(getattr(value, "language", "") or language),
                                 "timestamps": timestamps,
                                 "segments": _segments(
                                     timestamps,
                                     text,
-                                    fallback_start=offset,
+                                    fallback_start=float(start),
                                     segment_prefix=f"chunk-{chunk_index:04d}-result-{value_index:04d}",
                                 ),
                             }
@@ -258,23 +352,11 @@ def run_qwen3_asr(
                         durable_path = str(durable)
                     except Exception as copy_exc:  # pragma: no cover - defensive filesystem evidence.
                         copy_error = str(copy_exc)
-                    retry = _retry_command(
-                        media=media,
-                        output=output.with_name(f"{output.stem}-retry-chunk-{chunk_index:04d}.json"),
-                        model=model,
-                        forced_aligner=forced_aligner,
-                        language=language,
-                        device=device,
-                        max_new_tokens=max_new_tokens,
-                        dtype_name=dtype_name,
-                        chunk_seconds=chunk_duration,
-                        chunk_index=chunk_index,
-                    )
                     failed_chunks.append(
                         {
                             "chunk_index": chunk_index,
-                            "start": offset,
-                            "end": offset + chunk_duration,
+                            "start": float(start),
+                            "end": float(end),
                             "reason": code,
                             "detail": str(exc),
                             "artifact_path": durable_path,
@@ -284,6 +366,8 @@ def run_qwen3_asr(
                             "retry_exhausted": attempt_count >= attempt_limit,
                         }
                     )
+                rows.sort(key=lambda row: int(row.get("chunk_index", -1)))
+                failed_chunks.sort(key=lambda row: int(row.get("chunk_index", -1)))
                 _write_checkpoint(
                     checkpoint_path,
                     media=media,
@@ -296,6 +380,7 @@ def run_qwen3_asr(
                     requested_chunk_count=requested_chunk_count,
                     execution_contract=execution_contract,
                 )
+                chunk.unlink(missing_ok=True)
                 progress.emit(
                     stage="transcription",
                     percent=10 + (80 * current / max(1, total)),
@@ -384,6 +469,7 @@ def _load_checkpoint(
     max_new_tokens: int,
     dtype_name: str,
     chunk_indexes: list[int] | None,
+    window_plan_revision: str | None = None,
     resume: bool,
 ) -> dict[str, Any]:
     default = _checkpoint_default()
@@ -405,6 +491,7 @@ def _load_checkpoint(
         max_new_tokens=max_new_tokens,
         dtype_name=dtype_name,
         chunk_indexes=chunk_indexes,
+        window_plan_revision=window_plan_revision,
     )
     if not qwen_checkpoint_matches(payload, expected_contract):
         return default
@@ -464,11 +551,12 @@ def qwen_checkpoint_execution_contract(
     max_new_tokens: int,
     dtype_name: str,
     chunk_indexes: list[int] | None,
+    window_plan_revision: str | None = None,
 ) -> dict[str, Any]:
     """Return the semantic identity used to accept checkpointed ASR text."""
     resolved = media.expanduser().resolve()
     stat = resolved.stat()
-    return {
+    contract = {
         "input_identity": {
             "path": str(resolved),
             "bytes": int(stat.st_size),
@@ -483,6 +571,40 @@ def qwen_checkpoint_execution_contract(
         "dtype": str(dtype_name or "auto").strip().lower(),
         "chunk_indexes": sorted({int(value) for value in chunk_indexes or []}),
     }
+    if window_plan_revision:
+        contract["window_plan_revision"] = str(window_plan_revision)
+    return contract
+
+
+def qwen_window_plan_revision(
+    *,
+    media: Path,
+    chunk_seconds: int,
+    boundaries: list[tuple[float, float]],
+) -> str:
+    """Bind checkpoint identity to the deterministic fixed-window plan."""
+
+    resolved = media.expanduser().resolve()
+    stat = resolved.stat()
+    return canonical_json_sha256(
+        {
+            "schema": "video_knowledge_pipeline.qwen_window_plan.v1",
+            "input_identity": {
+                "path": str(resolved),
+                "bytes": int(stat.st_size),
+                "mtime_ns": int(stat.st_mtime_ns),
+            },
+            "chunk_seconds": int(chunk_seconds),
+            "windows": [
+                {
+                    "index": index,
+                    "start_seconds": round(float(start), 6),
+                    "end_seconds": round(float(end), 6),
+                }
+                for index, (start, end) in enumerate(boundaries)
+            ],
+        }
+    )
 
 
 def qwen_checkpoint_matches(payload: dict[str, Any], expected_contract: dict[str, Any]) -> bool:
@@ -568,7 +690,47 @@ def _segments(
     return segments
 
 
+def _media_duration_seconds(media: Path) -> float:
+    ffprobe = str(resolve_media_tool("ffprobe") or "")
+    if not ffprobe:
+        raise RuntimeError("ffprobe_not_ready_for_qwen3_asr_window_planning")
+    command = [
+        ffprobe,
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        str(media),
+    ]
+    completed = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=120,
+        check=False,
+        env=local_tool_subprocess_env(),
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(
+            "qwen3_asr_duration_probe_failed: "
+            f"returncode={completed.returncode}; stderr={completed.stderr[-500:]}"
+        )
+    try:
+        duration = float(completed.stdout.strip())
+    except ValueError as exc:
+        raise RuntimeError("qwen3_asr_duration_probe_invalid") from exc
+    if not math.isfinite(duration) or duration <= 0:
+        raise RuntimeError("qwen3_asr_duration_probe_invalid")
+    return duration
+
+
 def _audio_chunks(media: Path, output_dir: Path, *, chunk_seconds: int) -> list[Path]:
+    """Compatibility helper for FunASR; Qwen execution no longer calls it."""
+
     ffmpeg = resolve_media_tool("ffmpeg")
     if not ffmpeg:
         raise RuntimeError("ffmpeg_not_ready_for_qwen3_asr_chunking")
@@ -649,13 +811,6 @@ def _chunk_indexes(value: str) -> list[int] | None:
     if any(value < 0 for value in indexes):
         raise ValueError("chunk indexes must be zero or greater")
     return indexes
-
-
-def _chunk_index(path: Path) -> int:
-    match = re.search(r"(\d+)$", path.stem)
-    if not match:
-        raise ValueError(f"chunk filename has no numeric index: {path.name}")
-    return int(match.group(1))
 
 
 def _retry_command(

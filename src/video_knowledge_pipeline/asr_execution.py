@@ -949,7 +949,11 @@ def _qwen_resume_command(command: list[str], *, resume: bool) -> list[str]:
     return updated
 
 
-def _qwen_command_contract(command: list[str]) -> dict[str, Any] | None:
+def _qwen_command_contract(
+    command: list[str],
+    *,
+    window_plan_revision: str | None = None,
+) -> dict[str, Any] | None:
     if not _is_qwen_asr_command(command):
         return None
     input_value = _command_option(command, "--input")
@@ -980,6 +984,7 @@ def _qwen_command_contract(command: list[str]) -> dict[str, Any] | None:
             or os.environ.get("VKP_QWEN_ASR_DTYPE", "auto")
         ),
         chunk_indexes=chunk_indexes,
+        window_plan_revision=window_plan_revision,
     )
 
 
@@ -1001,7 +1006,16 @@ def _qwen_checkpoint_resume_details(expected_output: Path, command: list[str]) -
             "checkpoint_resume_eligible": False,
             "checkpoint_resume_rejected_reason": "checkpoint_schema_mismatch",
         }
-    contract = _qwen_command_contract(command)
+    stored_contract = payload.get("execution_contract")
+    window_plan_revision = (
+        str(stored_contract.get("window_plan_revision") or "")
+        if isinstance(stored_contract, dict)
+        else ""
+    )
+    contract = _qwen_command_contract(
+        command,
+        window_plan_revision=window_plan_revision or None,
+    )
     if contract is None:
         return {
             "checkpoint_path": str(checkpoint),
@@ -1048,6 +1062,7 @@ def _qwen_checkpoint_resume_details(expected_output: Path, command: list[str]) -
         "checkpoint_successful_chunk_count": successful_count,
         "checkpoint_successful_chunk_indexes": successful,
         "checkpoint_failed_chunk_count": failed_count,
+        "checkpoint_window_plan_revision": window_plan_revision,
         "checkpoint_complete": complete,
         "resumed_from_checkpoint": bool(successful or failed_count),
         "partial_output_preserved": bool(successful),
@@ -1061,7 +1076,13 @@ def _qwen_completed_output_matches(
 ) -> bool:
     if not output.is_file():
         return False
-    contract = _qwen_command_contract(command)
+    contract = _qwen_command_contract(
+        command,
+        window_plan_revision=(
+            str(checkpoint_details.get("checkpoint_window_plan_revision") or "")
+            or None
+        ),
+    )
     if contract is None:
         return False
     try:
@@ -1090,7 +1111,19 @@ def _restore_qwen_output_from_checkpoint(
 ) -> None:
     checkpoint_path = Path(str(checkpoint_details["checkpoint_path"]))
     checkpoint = read_json(checkpoint_path)
-    contract = _qwen_command_contract(command)
+    stored_contract = (
+        checkpoint.get("execution_contract")
+        if isinstance(checkpoint, dict)
+        else None
+    )
+    contract = _qwen_command_contract(
+        command,
+        window_plan_revision=(
+            str(stored_contract.get("window_plan_revision") or "")
+            if isinstance(stored_contract, dict)
+            else None
+        ),
+    )
     if not isinstance(checkpoint, dict) or contract is None:
         raise ValueError("Qwen checkpoint cannot be restored without a matching execution contract")
     if not qwen_checkpoint_matches(checkpoint, contract):

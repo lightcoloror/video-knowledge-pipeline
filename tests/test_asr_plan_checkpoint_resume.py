@@ -10,7 +10,10 @@ import pytest
 
 from video_knowledge_pipeline import asr_execution
 from video_knowledge_pipeline.asr_execution import run_asr_plan
-from video_knowledge_pipeline.qwen3_asr_python_runner import _load_checkpoint
+from video_knowledge_pipeline.qwen3_asr_python_runner import (
+    _load_checkpoint,
+    qwen_checkpoint_execution_contract,
+)
 
 
 def _row(index: int, text: str | None = None) -> dict:
@@ -171,6 +174,47 @@ def test_run_asr_plan_restores_complete_checkpoint_and_rerun_is_idempotent(
     assert json.loads(output.read_text(encoding="utf-8"))["checkpoint_path"] == str(checkpoint)
 
 
+def test_run_asr_plan_restores_complete_window_revision_checkpoint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plan_path, media, output, _command = _fixture_plan(tmp_path)
+    contract = qwen_checkpoint_execution_contract(
+        media=media,
+        model="fixture/qwen3-asr",
+        forced_aligner="",
+        language="Chinese",
+        context="",
+        chunk_seconds=30,
+        max_new_tokens=1024,
+        dtype_name="auto",
+        chunk_indexes=[],
+        window_plan_revision="d" * 64,
+    )
+    _checkpoint(
+        output,
+        media,
+        indexes=[0, 1],
+        status="completed",
+        execution_contract=contract,
+    )
+
+    def fail_if_executed(*_args, **_kwargs):
+        raise AssertionError("complete window checkpoint must not launch ASR")
+
+    monkeypatch.setattr(
+        asr_execution,
+        "_run_command_with_cuda_oom_recovery",
+        fail_if_executed,
+    )
+
+    result = run_asr_plan(plan_path, execute=True, normalize=False)
+
+    assert result["execution_skipped_reason"] == "checkpoint_complete"
+    assert result["checkpoint_window_plan_revision"] == "d" * 64
+    assert result["checkpoint_recovery"] == "raw_output_rebuilt"
+
+
 def test_run_asr_plan_surfaces_partial_checkpoint_before_child_resume(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -263,6 +307,49 @@ def test_qwen_checkpoint_contract_rejects_context_drift(tmp_path: Path) -> None:
         max_new_tokens=1024,
         dtype_name="auto",
         chunk_indexes=[],
+        resume=True,
+    )
+
+    assert loaded["resumed"] is False
+    assert loaded["results"] == []
+
+
+def test_qwen_checkpoint_contract_rejects_window_plan_revision_drift(
+    tmp_path: Path,
+) -> None:
+    media = tmp_path / "input.wav"
+    media.write_bytes(b"fixture")
+    contract = qwen_checkpoint_execution_contract(
+        media=media,
+        model="fixture/qwen3-asr",
+        forced_aligner="",
+        language="Chinese",
+        context="",
+        chunk_seconds=30,
+        max_new_tokens=1024,
+        dtype_name="auto",
+        chunk_indexes=[],
+        window_plan_revision="a" * 64,
+    )
+    checkpoint = _checkpoint(
+        tmp_path / "raw-asr-output.json",
+        media,
+        indexes=[0],
+        execution_contract=contract,
+    )
+
+    loaded = _load_checkpoint(
+        checkpoint,
+        media=media.resolve(),
+        model="fixture/qwen3-asr",
+        chunk_seconds=30,
+        forced_aligner="",
+        language="Chinese",
+        context="",
+        max_new_tokens=1024,
+        dtype_name="auto",
+        chunk_indexes=[],
+        window_plan_revision="b" * 64,
         resume=True,
     )
 

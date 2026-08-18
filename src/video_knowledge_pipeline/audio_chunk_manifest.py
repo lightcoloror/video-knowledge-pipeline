@@ -22,6 +22,106 @@ _SILENCE_START = re.compile(r"silence_start:\s*(-?\d+(?:\.\d+)?)")
 _SILENCE_END = re.compile(r"silence_end:\s*(-?\d+(?:\.\d+)?)")
 
 
+def fixed_chunk_boundaries(
+    total_seconds: float,
+    target_chunk_seconds: float,
+) -> list[tuple[float, float]]:
+    """Return deterministic contiguous fixed-duration source windows."""
+
+    total = float(total_seconds)
+    target = float(target_chunk_seconds)
+    if not math.isfinite(total) or total <= 0:
+        raise ValueError("total_seconds must be positive and finite")
+    if not math.isfinite(target) or target <= 0:
+        raise ValueError("target_chunk_seconds must be positive and finite")
+    return [
+        (index * target, min(total, (index + 1) * target))
+        for index in range(math.ceil(total / target))
+    ]
+
+
+def extract_audio_chunk_window(
+    media_path: str | Path,
+    output_dir: str | Path,
+    *,
+    index: int,
+    start_seconds: float,
+    end_seconds: float,
+    ffmpeg_path: str | Path | None = None,
+    timeout_seconds: int = 900,
+) -> dict[str, Any]:
+    """Extract exactly one audio window without touching sibling artifacts."""
+
+    media = Path(media_path).expanduser().resolve()
+    output = Path(output_dir).expanduser().resolve()
+    chunk_index = int(index)
+    start = float(start_seconds)
+    end = float(end_seconds)
+    if not media.is_file():
+        raise FileNotFoundError(media)
+    if chunk_index < 0:
+        raise ValueError("index must be zero or greater")
+    if not math.isfinite(start) or start < 0:
+        raise ValueError("start_seconds must be nonnegative and finite")
+    if not math.isfinite(end) or end <= start:
+        raise ValueError("end_seconds must be finite and greater than start_seconds")
+    ffmpeg = str(ffmpeg_path or resolve_media_tool("ffmpeg") or "")
+    if not ffmpeg:
+        raise RuntimeError("ffmpeg_not_available_for_audio_chunk_window")
+
+    output.mkdir(parents=True, exist_ok=True)
+    chunk_path = output / f"chunk-{chunk_index:04d}.wav"
+    command = [
+        ffmpeg,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-ss",
+        f"{start:.6f}",
+        "-i",
+        str(media),
+        "-t",
+        f"{end - start:.6f}",
+        "-map",
+        "0:a:0",
+        "-ac",
+        "1",
+        "-ar",
+        "16000",
+        str(chunk_path),
+    ]
+    completed = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=max(1, int(timeout_seconds)),
+        check=False,
+        env=local_tool_subprocess_env(),
+    )
+    if (
+        completed.returncode != 0
+        or not chunk_path.is_file()
+        or chunk_path.stat().st_size == 0
+    ):
+        raise RuntimeError(
+            "audio_chunk_window_extraction_failed: "
+            f"chunk_index={chunk_index}; returncode={completed.returncode}; "
+            f"stderr={completed.stderr[-500:]}"
+        )
+    return {
+        "index": chunk_index,
+        "path": str(chunk_path),
+        "bytes": chunk_path.stat().st_size,
+        "start_seconds": round(start, 6),
+        "end_seconds": round(end, 6),
+        "duration_seconds": round(end - start, 6),
+        "command": command,
+    }
+
+
 def parse_subtitle_edit_silence_intervals(output: str) -> list[tuple[float, float]]:
     """Adapt Subtitle Edit's tested FFmpeg silence parser.
 
@@ -172,11 +272,7 @@ def prepare_fixed_overlap_chunks(
     ffmpeg = str(ffmpeg_path or resolve_media_tool("ffmpeg") or "")
     if not ffmpeg:
         raise RuntimeError("ffmpeg_not_available_for_overlapped_chunking")
-    count = max(1, math.ceil(duration / target))
-    core_boundaries = [
-        (index * target, min(duration, (index + 1) * target))
-        for index in range(count)
-    ]
+    core_boundaries = fixed_chunk_boundaries(duration, target)
     extraction_boundaries = expand_chunk_boundaries(
         core_boundaries,
         total_seconds=duration,
@@ -217,10 +313,9 @@ def build_fixed_chunk_manifest(
     duration = float(media_duration_seconds)
     if duration <= 0:
         duration = target * len(paths)
-    boundaries = [
-        (index * target, min(duration, (index + 1) * target))
-        for index in range(len(paths))
-    ]
+    boundaries = (
+        fixed_chunk_boundaries(duration, target)[: len(paths)] if paths else []
+    )
     return _manifest(
         media_path,
         paths,
@@ -363,48 +458,20 @@ def _extract_chunk_windows(
     chunks: list[Path] = []
     commands: list[list[str]] = []
     for index, (start, end) in enumerate(boundaries):
-        chunk_path = output / f"chunk-{index:04d}.wav"
-        command = [
-            ffmpeg,
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-y",
-            "-ss",
-            f"{start:.6f}",
-            "-i",
-            str(media),
-            "-t",
-            f"{end - start:.6f}",
-            "-map",
-            "0:a:0",
-            "-ac",
-            "1",
-            "-ar",
-            "16000",
-            str(chunk_path),
-        ]
-        completed = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=max(1, int(timeout_seconds)),
-            check=False,
-            env=local_tool_subprocess_env(),
-        )
-        commands.append(command)
-        if (
-            completed.returncode != 0
-            or not chunk_path.is_file()
-            or chunk_path.stat().st_size == 0
-        ):
-            raise RuntimeError(
-                f"{failure_prefix}: chunk_index={index}; "
-                f"returncode={completed.returncode}; stderr={completed.stderr[-500:]}"
+        try:
+            extracted = extract_audio_chunk_window(
+                media,
+                output,
+                index=index,
+                start_seconds=start,
+                end_seconds=end,
+                ffmpeg_path=ffmpeg,
+                timeout_seconds=timeout_seconds,
             )
-        chunks.append(chunk_path)
+        except Exception as exc:
+            raise RuntimeError(f"{failure_prefix}: {exc}") from exc
+        chunks.append(Path(str(extracted["path"])))
+        commands.append(list(extracted["command"]))
     return chunks, commands
 
 def compute_audio_chunk_manifest_revision(manifest: Mapping[str, Any]) -> str:

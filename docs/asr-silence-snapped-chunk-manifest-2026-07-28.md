@@ -160,3 +160,15 @@ Python 薄适配、清单、checkpoint identity 与现有 FunASR runner 的编�
 - Evidence: synthetic regressions cover partial continuation metadata, complete-checkpoint recovery without child execution, byte-stable completed reruns, explicit fresh execution, semantic-contract drift rejection, and legacy checkpoint compatibility. No real media, local model, Provider, upload, network, or publication is involved.
 - Effective scope: local Qwen full-ASR plans and their derived raw output/run evidence. Canonical transcript arbitration, Timeline, other ASR engines, model selection, retry limits, and media files are unchanged.
 - Rollback: remove the top-level checkpoint inspection/restoration helpers and CLI flag, then stop writing the new `execution_contract`; legacy checkpoint fields remain readable and no source media or canonical transcript requires rollback.
+
+## 2026-08-18 recoverable Qwen fixed-window execution
+
+- Updated by: VKP Implementation Agent, 2026-08-18.
+- Intent: prevent one extraction failure in ultra-long local Qwen ASR from discarding already completed windows or blocking later windows.
+- Decision: reuse `audio_chunk_manifest.fixed_chunk_boundaries` and `extract_audio_chunk_window`; probe duration once, calculate a deterministic full window plan, then extract and transcribe only unfinished indexes inside the existing Qwen checkpoint loop. Each extraction or transcription outcome is written atomically before the temporary window is removed.
+- Reason: the former FFmpeg segment command created every WAV before transcription, so extraction was all-or-nothing and resume repeated the complete split. Per-window extraction makes the existing checkpoint the durable state owner without introducing another scheduler.
+- Evidence: synthetic three-window tests preserve indexes 0 and 2 when index 1 extraction fails, continue past the failed middle window, resume by extracting only index 1, and apply a local `[1, 2]` timestamp to the `[30, 60]` window as `[31, 32]` exactly once. Associated synthetic checkpoint, manifest, local-media, and FunASR regressions pass under the managed Windows runtime.
+- Effective scope: local Qwen fixed-duration audio planning, temporary window extraction, checkpoint identity, retry evidence, and top-level checkpoint recovery. Provider routing, model selection, canonical transcript arbitration, configuration, and source media are unchanged.
+- Compatibility: new checkpoints require exact `window_plan_revision` equality inside the execution contract. Legacy checkpoints without an execution contract retain the existing bounded path/bytes/model/chunk-size match.
+- Privacy boundary: tests use fixture bytes and fake runtimes only; no real media, model inference/download, Provider, network, upload, or publication was used.
+- Rollback: revert the Qwen lazy-window loop and revision field, restore the previous batch segment helper, and remove the two reusable fixed-window primitives. Existing legacy checkpoint data and canonical transcripts require no migration.
