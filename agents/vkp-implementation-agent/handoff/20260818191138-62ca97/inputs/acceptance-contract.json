@@ -1,0 +1,48 @@
+{
+  "schema": "video_knowledge_pipeline.agent_handoff_acceptance.v1",
+  "task_id": "20260818191138-62ca97",
+  "base_commit": "31b7e437aaf86fce17e265dbcd16a4ff38f9de00",
+  "owner": "codex-vkp-owner",
+  "executor": "vkp-implementation-agent",
+  "scope": "recoverable_lazy_windows_for_local_qwen_asr",
+  "required_behaviors": [
+    "one failed extraction window does not remove completed window results",
+    "one failed window does not prevent later windows from running",
+    "resume does not re-extract checkpointed successful windows",
+    "window-local timestamps receive the exact source-window start offset once",
+    "complete checkpoint recovery and byte-stable top-level rerun remain valid",
+    "new checkpoint identity binds deterministic window-plan revision",
+    "legacy checkpoint compatibility remains bounded and explicit"
+  ],
+  "required_evidence": [
+    "red-to-green synthetic tests for middle-window extraction failure and resume",
+    "focused and associated managed pytest receipt with exact pass count",
+    "Ruff, AST, diff-check, JSON validation, and sensitive-diff scan",
+    "selective commit hash and changed-path list",
+    "outputs/completion-receipt.json",
+    "repository completion receipt under docs/receipts"
+  ],
+  "prohibited_actions": [
+    "real media processing",
+    "model inference or download",
+    "Provider, network, upload, or publication",
+    "configuration mutation",
+    "reset, stash, checkout, cleanup, or deletion of existing files",
+    "editing or staging pre-existing unrelated dirty files",
+    "push",
+    "creating a second ASR checkpoint or orchestration state machine"
+  ],
+  "codex_acceptance": {
+    "status_before_review": "implemented_not_accepted",
+    "review_required": true,
+    "review_checks": [
+      "base and selective commit ancestry",
+      "diff scope and state ownership",
+      "failure and retry semantics",
+      "timestamp offset correctness",
+      "test reproducibility and environment blockers",
+      "privacy and no-real-media boundary",
+      "completion receipt consistency"
+    ]
+  }
+}
