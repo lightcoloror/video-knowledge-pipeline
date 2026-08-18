@@ -1127,6 +1127,7 @@ def main(argv: list[str] | None = None) -> int:
             args.plan_json,
             execute=args.execute,
             timeout_seconds=args.timeout_seconds,
+            resume=args.resume,
             progress_callback=stderr_progress_callback,
         )
     elif args.command == "asr-smoke":
@@ -3682,6 +3683,13 @@ def build_parser() -> argparse.ArgumentParser:
     asr_run.add_argument("plan_json")
     asr_run.add_argument("--execute", action="store_true")
     asr_run.add_argument("--timeout-seconds", type=int, default=1800)
+    asr_run.add_argument(
+        "--no-resume",
+        action="store_false",
+        dest="resume",
+        help="Ignore a matching Qwen chunk checkpoint and execute requested chunks again",
+    )
+    asr_run.set_defaults(resume=True)
 
     asr_smoke_parser = sub.add_parser("asr-smoke", help="Run or preview a local-only short ASR smoke test")
     asr_smoke_parser.add_argument("media_path")

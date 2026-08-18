@@ -1,0 +1,37 @@
+{
+  "dispatch_id": "VKP-ASR-PLAN-CHECKPOINT-RESUME-20260818-01",
+  "goal_status": "complete",
+  "generated_at": "2026-08-18 19:05:02 +08:00",
+  "acting_tool_model": "Codex (GPT-5.6 Sol)",
+  "completed_scope": [
+    "Explicit checkpoint resume orchestration for local Qwen run-asr-plan execution",
+    "Partial checkpoint reporting and delegation to the existing Qwen chunk runner",
+    "Complete checkpoint recovery to final raw JSON without model execution",
+    "Byte-stable reuse of matching completed raw output",
+    "Explicit --no-resume fresh execution control",
+    "Semantic execution-contract binding with SHA-256 context digest and legacy checkpoint compatibility"
+  ],
+  "verification": [
+    "Focused and associated offline synthetic tests: 46 passed",
+    "Ruff scoped check: passed",
+    "Python AST parse and CLI resume AST contract: passed",
+    "git diff --check: passed before receipt generation",
+    "No real media, model, Provider, network, upload, publication, configuration change, or push"
+  ],
+  "verification_limitations": [
+    {
+      "scope": "tests/test_asr_pipeline.py",
+      "status": "collection_blocked",
+      "reason": "The active Python environment lacks the project-declared rapidfuzz dependency; no test assertion executed and no dependency was installed during this task"
+    }
+  ],
+  "change_rationale": {
+    "intent": "Continue ultra-long local ASR after an outer timeout without discarding successful chunks",
+    "decision": "Reuse qwen3_asr_python_runner as the only chunk state machine and keep run-asr-plan as a validating orchestration layer",
+    "reason": "Restarting all chunks wastes hours and may change output, while a second checkpoint state machine would create conflicting truth",
+    "evidence": "Synthetic partial, complete, idempotent, fresh-run, contract-drift, and legacy-compatibility regressions plus existing runner resilience suites",
+    "effective_scope": "Local Qwen full-ASR plans, derived raw output, progress, run logs, and Bundle run evidence",
+    "rollback": "Remove the orchestration helpers and CLI flag and stop writing execution_contract; existing legacy checkpoint fields remain readable"
+  },
+  "boundary_check": "pass"
+}

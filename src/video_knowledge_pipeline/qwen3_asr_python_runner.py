@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -18,6 +19,7 @@ from .storage import read_json, write_json
 
 
 SCHEMA = "video_knowledge_pipeline.qwen3_asr_raw_output.v1"
+CHECKPOINT_SCHEMA = "video_knowledge_pipeline.qwen3_asr_checkpoint.v1"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -145,11 +147,28 @@ def run_qwen3_asr(
     failed_chunks: list[dict[str, Any]] = []
     chunk_duration = max(30, int(chunk_seconds or 300))
     attempt_limit = max(1, int(max_chunk_attempts or 1))
+    execution_contract = qwen_checkpoint_execution_contract(
+        media=media,
+        model=model,
+        forced_aligner=forced_aligner,
+        language=language,
+        context=context,
+        chunk_seconds=chunk_duration,
+        max_new_tokens=max_new_tokens,
+        dtype_name=dtype_name,
+        chunk_indexes=chunk_indexes,
+    )
     checkpoint = _load_checkpoint(
         checkpoint_path,
         media=media,
         model=model,
         chunk_seconds=chunk_duration,
+        forced_aligner=forced_aligner,
+        language=language,
+        context=context,
+        max_new_tokens=max_new_tokens,
+        dtype_name=dtype_name,
+        chunk_indexes=chunk_indexes,
         resume=resume,
     )
     rows = checkpoint["results"]
@@ -275,6 +294,7 @@ def run_qwen3_asr(
                     results=rows,
                     failed_chunks=failed_chunks,
                     requested_chunk_count=requested_chunk_count,
+                    execution_contract=execution_contract,
                 )
                 progress.emit(
                     stage="transcription",
@@ -337,6 +357,7 @@ def run_qwen3_asr(
         results=rows,
         failed_chunks=failed_chunks,
         requested_chunk_count=requested_chunk_count,
+        execution_contract=execution_contract,
         status=status,
     )
     return _finalize_payload(payload, output, report_path, progress)
@@ -357,6 +378,12 @@ def _load_checkpoint(
     media: Path,
     model: str,
     chunk_seconds: int,
+    forced_aligner: str,
+    language: str,
+    context: str,
+    max_new_tokens: int,
+    dtype_name: str,
+    chunk_indexes: list[int] | None,
     resume: bool,
 ) -> dict[str, Any]:
     default = _checkpoint_default()
@@ -368,15 +395,18 @@ def _load_checkpoint(
         return default
     if not isinstance(payload, dict):
         return default
-    identity = payload.get("input_identity")
-    if not isinstance(identity, dict):
-        return default
-    if (
-        str(identity.get("path") or "") != str(media)
-        or int(identity.get("bytes") or -1) != media.stat().st_size
-        or str(payload.get("model") or "") != model
-        or int(payload.get("chunk_seconds") or 0) != int(chunk_seconds)
-    ):
+    expected_contract = qwen_checkpoint_execution_contract(
+        media=media,
+        model=model,
+        forced_aligner=forced_aligner,
+        language=language,
+        context=context,
+        chunk_seconds=chunk_seconds,
+        max_new_tokens=max_new_tokens,
+        dtype_name=dtype_name,
+        chunk_indexes=chunk_indexes,
+    )
+    if not qwen_checkpoint_matches(payload, expected_contract):
         return default
     rows = [dict(row) for row in payload.get("results") or [] if isinstance(row, dict)]
     failures = [dict(row) for row in payload.get("failed_chunks") or [] if isinstance(row, dict)]
@@ -400,13 +430,15 @@ def _write_checkpoint(
     results: list[dict[str, Any]],
     failed_chunks: list[dict[str, Any]],
     requested_chunk_count: int,
+    execution_contract: dict[str, Any],
     status: str = "running",
 ) -> None:
     successful = sorted({int(row.get("chunk_index") or 0) for row in results})
     payload = {
-        "schema": "video_knowledge_pipeline.qwen3_asr_checkpoint.v1",
+        "schema": CHECKPOINT_SCHEMA,
         "status": status,
-        "input_identity": {"path": str(media), "bytes": media.stat().st_size},
+        "input_identity": dict(execution_contract["input_identity"]),
+        "execution_contract": dict(execution_contract),
         "model": model,
         "forced_aligner": forced_aligner,
         "language": language,
@@ -419,6 +451,62 @@ def _write_checkpoint(
         "failed_chunks": failed_chunks,
     }
     write_json(path, payload)
+
+
+def qwen_checkpoint_execution_contract(
+    *,
+    media: Path,
+    model: str,
+    forced_aligner: str,
+    language: str,
+    context: str,
+    chunk_seconds: int,
+    max_new_tokens: int,
+    dtype_name: str,
+    chunk_indexes: list[int] | None,
+) -> dict[str, Any]:
+    """Return the semantic identity used to accept checkpointed ASR text."""
+    resolved = media.expanduser().resolve()
+    stat = resolved.stat()
+    return {
+        "input_identity": {
+            "path": str(resolved),
+            "bytes": int(stat.st_size),
+            "mtime_ns": int(stat.st_mtime_ns),
+        },
+        "model": str(model),
+        "forced_aligner": str(forced_aligner),
+        "language": str(language),
+        "context_sha256": hashlib.sha256(str(context).encode("utf-8")).hexdigest(),
+        "chunk_seconds": int(chunk_seconds),
+        "max_new_tokens": max(128, int(max_new_tokens or 1024)),
+        "dtype": str(dtype_name or "auto").strip().lower(),
+        "chunk_indexes": sorted({int(value) for value in chunk_indexes or []}),
+    }
+
+
+def qwen_checkpoint_matches(payload: dict[str, Any], expected_contract: dict[str, Any]) -> bool:
+    """Validate new exact contracts while retaining bounded legacy resume."""
+    stored_contract = payload.get("execution_contract")
+    if isinstance(stored_contract, dict):
+        return stored_contract == expected_contract
+
+    identity = payload.get("input_identity")
+    expected_identity = expected_contract["input_identity"]
+    if not isinstance(identity, dict):
+        return False
+    if (
+        str(identity.get("path") or "") != str(expected_identity["path"])
+        or int(identity.get("bytes") or -1) != int(expected_identity["bytes"])
+        or str(payload.get("model") or "") != str(expected_contract["model"])
+        or int(payload.get("chunk_seconds") or 0) != int(expected_contract["chunk_seconds"])
+    ):
+        return False
+    if "forced_aligner" in payload and str(payload.get("forced_aligner") or "") != str(expected_contract["forced_aligner"]):
+        return False
+    if "language" in payload and str(payload.get("language") or "") != str(expected_contract["language"]):
+        return False
+    return True
 
 def _torch_dtype(value: str, device: str, torch: Any) -> Any:
     requested = str(value or "auto").strip().lower()

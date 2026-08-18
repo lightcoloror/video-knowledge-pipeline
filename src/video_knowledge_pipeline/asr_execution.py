@@ -13,6 +13,12 @@ from .asr_runner import plan_asr_run
 from .local_media_progress import LocalMediaProgress, ProgressCallback
 from .media_tools import local_tool_subprocess_env, resolve_media_tool
 from .models import now_iso
+from .qwen3_asr_python_runner import (
+    CHECKPOINT_SCHEMA as QWEN_CHECKPOINT_SCHEMA,
+    SCHEMA as QWEN_RAW_OUTPUT_SCHEMA,
+    qwen_checkpoint_execution_contract,
+    qwen_checkpoint_matches,
+)
 from .run_artifact_registry import register_bundle_run
 from .storage import append_jsonl, ensure_project_dirs, read_json, read_jsonl, write_json
 
@@ -118,6 +124,7 @@ def run_asr_plan(
     execute: bool = False,
     normalize: bool = True,
     timeout_seconds: int = 0,
+    resume: bool = True,
     progress_callback: ProgressCallback | None = None,
 ) -> dict[str, Any]:
     """Preview or run the ASR command from an ASR or lecture pipeline plan."""
@@ -152,6 +159,8 @@ def run_asr_plan(
         "asr_mode": asr_mode,
         "normalization_skipped_reason": "alignment_sidecar" if alignment_sidecar and normalize_requested else ("caller_disabled" if not normalize_requested else ""),
         "timeout_seconds": int(timeout_seconds or 0),
+        "resume": bool(resume),
+        "resumed_from_checkpoint": False,
         "started_at": now_iso(),
         "output_dir": str(output_dir),
         "expected_output_json": str(expected_output),
@@ -180,6 +189,67 @@ def run_asr_plan(
         output_paths=[expected_output],
         report_paths=[output_dir / "asr-run-report.md"],
     )
+
+    effective_command = _qwen_resume_command(command, resume=resume)
+    if resume:
+        checkpoint_details = _qwen_checkpoint_resume_details(expected_output, effective_command)
+        result.update(checkpoint_details)
+        if checkpoint_details.get("checkpoint_complete"):
+            output_reused = _qwen_completed_output_matches(
+                expected_output,
+                effective_command,
+                checkpoint_details,
+            )
+            if output_reused:
+                checkpoint_recovery = "raw_output_reused"
+                skipped_reason = "output_already_complete"
+            else:
+                _restore_qwen_output_from_checkpoint(
+                    expected_output,
+                    effective_command,
+                    checkpoint_details,
+                )
+                checkpoint_recovery = "raw_output_rebuilt"
+                skipped_reason = "checkpoint_complete"
+            result.update(
+                {
+                    "status": "ok",
+                    "returncode": 0,
+                    "planned_command": command,
+                    "command": effective_command,
+                    "execution_attempts": [],
+                    "execution_skipped": True,
+                    "execution_skipped_reason": skipped_reason,
+                    "checkpoint_recovery": checkpoint_recovery,
+                    "raw_output_json": str(expected_output.resolve()),
+                    "finished_at": now_iso(),
+                }
+            )
+            progress.emit(
+                stage="resume",
+                percent=85,
+                message=(
+                    "Reusing completed Qwen ASR output"
+                    if output_reused
+                    else "Rebuilding Qwen ASR output from completed checkpoint"
+                ),
+                output_paths=[expected_output],
+                report_paths=[Path(str(checkpoint_details["checkpoint_path"]))],
+            )
+            if normalize:
+                title = Path(str(asr_plan.get("media_path") or expected_output)).stem
+                try:
+                    result["normalized"] = normalize_asr_output(
+                        project,
+                        expected_output,
+                        provider=provider,
+                        title=title,
+                    )
+                except Exception as exc:
+                    result["status"] = "normalize_failed"
+                    result["normalization_error"] = str(exc)
+                    result["stderr"] = _append_message(result.get("stderr", ""), str(exc))
+            return _write_asr_log(project, result)
 
     if not asr_plan.get("available"):
         availability = asr_plan.get("availability") if isinstance(asr_plan.get("availability"), dict) else {}
@@ -216,7 +286,7 @@ def run_asr_plan(
     progress.emit(stage="execution", percent=10, message=f"Running local ASR provider {provider}")
     try:
         completed, execution_attempts = _run_command_with_cuda_oom_recovery(
-            command,
+            effective_command,
             asr_plan=asr_plan,
             cwd=output_dir,
             timeout_seconds=timeout_seconds,
@@ -602,6 +672,8 @@ def _write_asr_log(root: Path, result: dict[str, Any]) -> dict[str, Any]:
         "provider": result.get("provider", ""),
         "execute": bool(result.get("execute")),
         "normalize": bool(result.get("normalize")),
+        "resume": bool(result.get("resume")),
+        "resumed_from_checkpoint": bool(result.get("resumed_from_checkpoint")),
         "status": result.get("status", ""),
         "returncode": result.get("returncode"),
         "command": result.get("command", []),
@@ -610,6 +682,11 @@ def _write_asr_log(root: Path, result: dict[str, Any]) -> dict[str, Any]:
         "stdout_tail": _tail(result.get("stdout", "")),
         "stderr_tail": _tail(result.get("stderr", "")),
         "execution_attempts": result.get("execution_attempts", []),
+        "execution_skipped_reason": result.get("execution_skipped_reason", ""),
+        "checkpoint_path": result.get("checkpoint_path", ""),
+        "checkpoint_successful_chunk_count": int(
+            result.get("checkpoint_successful_chunk_count") or 0
+        ),
         "runtime_metrics": result.get("runtime_metrics", {}),
     }
     append_jsonl(log_path, [record])
@@ -685,6 +762,7 @@ def _register_run_if_bundle(root: Path, result: dict[str, Any]) -> dict[str, Any
         parameters={
             "execute": bool(result.get("execute")),
             "normalize": bool(result.get("normalize")),
+            "resume": bool(result.get("resume")),
             "timeout_seconds": int(result.get("timeout_seconds") or 0),
             "preset": result.get("preset", ""),
             "provider": result.get("provider", ""),
@@ -693,6 +771,7 @@ def _register_run_if_bundle(root: Path, result: dict[str, Any]) -> dict[str, Any
             {"key": "run_report", "path": asr_log.get("report_path", "")},
             {"key": "run_log", "path": asr_log.get("markdown_path", "")},
             {"key": "raw_output_json", "path": result.get("raw_output_json", "")},
+            {"key": "checkpoint_json", "path": result.get("checkpoint_path", "")},
             {"key": "normalized_transcript_json", "path": ((result.get("normalized") or {}).get("json_path") if isinstance(result.get("normalized"), dict) else "")},
             {"key": "normalized_transcript_srt", "path": ((result.get("normalized") or {}).get("srt_path") if isinstance(result.get("normalized"), dict) else "")},
         ],
@@ -781,6 +860,11 @@ def _write_asr_run_report(result: dict[str, Any], record: dict[str, Any]) -> Pat
         f"- Preset: `{result.get('preset', '')}`",
         f"- Provider: `{result.get('provider', '')}`",
         f"- Execute: `{bool(result.get('execute'))}`",
+        f"- Resume enabled: `{bool(result.get('resume'))}`",
+        f"- Resumed from checkpoint: `{bool(result.get('resumed_from_checkpoint'))}`",
+        f"- Checkpoint: `{result.get('checkpoint_path', '')}`",
+        f"- Checkpoint successful chunks: `{result.get('checkpoint_successful_chunk_count', 0)}`",
+        f"- Execution skipped reason: `{result.get('execution_skipped_reason', '')}`",
         f"- Return code: `{result.get('returncode')}`",
         f"- Raw output: `{result.get('raw_output_json', '')}`",
         f"- Normalized JSON: `{record.get('normalized_json', '')}`",
@@ -852,26 +936,213 @@ def _tail(value: Any, *, limit: int = 4000) -> str:
     return str(value or "")[-limit:]
 
 
-def _qwen_checkpoint_timeout_details(expected_output: Path, command: list[str]) -> dict[str, Any]:
+def _is_qwen_asr_command(command: list[str]) -> bool:
+    return "video_knowledge_pipeline.qwen3_asr_python_runner" in command
+
+
+def _qwen_resume_command(command: list[str], *, resume: bool) -> list[str]:
+    if not _is_qwen_asr_command(command):
+        return list(command)
+    updated = [part for part in command if part != "--no-resume"]
+    if not resume:
+        updated.append("--no-resume")
+    return updated
+
+
+def _qwen_command_contract(command: list[str]) -> dict[str, Any] | None:
+    if not _is_qwen_asr_command(command):
+        return None
+    input_value = _command_option(command, "--input")
+    model = _command_option(command, "--model") or "Qwen/Qwen3-ASR-1.7B"
+    if not input_value:
+        return None
+    media = Path(input_value).expanduser().resolve()
+    if not media.is_file():
+        return None
+    forced_aligner = "" if "--no-timestamps" in command else (
+        _command_option(command, "--forced-aligner") or "Qwen/Qwen3-ForcedAligner-0.6B"
+    )
+    raw_indexes = _command_option(command, "--chunk-indexes")
+    try:
+        chunk_indexes = [int(value.strip()) for value in raw_indexes.split(",") if value.strip()]
+    except ValueError:
+        return None
+    return qwen_checkpoint_execution_contract(
+        media=media,
+        model=model,
+        forced_aligner=forced_aligner,
+        language=_command_option(command, "--language") or "Chinese",
+        context=_command_option(command, "--context"),
+        chunk_seconds=_command_int_option(command, "--chunk-seconds", default=300),
+        max_new_tokens=_command_int_option(command, "--max-new-tokens", default=1024),
+        dtype_name=(
+            _command_option(command, "--dtype")
+            or os.environ.get("VKP_QWEN_ASR_DTYPE", "auto")
+        ),
+        chunk_indexes=chunk_indexes,
+    )
+
+
+def _qwen_checkpoint_resume_details(expected_output: Path, command: list[str]) -> dict[str, Any]:
     checkpoint = expected_output.with_name(f"{expected_output.stem}-checkpoint.json")
     if not checkpoint.is_file():
         return {}
     try:
         payload = read_json(checkpoint)
     except Exception as exc:
-        return {"checkpoint_path": str(checkpoint), "checkpoint_error": str(exc)}
-    if not isinstance(payload, dict) or str(payload.get("schema") or "") != "video_knowledge_pipeline.qwen3_asr_checkpoint.v1":
-        return {}
-    successful = [int(value) for value in payload.get("successful_chunk_indexes") or []]
+        return {
+            "checkpoint_path": str(checkpoint),
+            "checkpoint_error": str(exc),
+            "checkpoint_resume_eligible": False,
+        }
+    if not isinstance(payload, dict) or str(payload.get("schema") or "") != QWEN_CHECKPOINT_SCHEMA:
+        return {
+            "checkpoint_path": str(checkpoint),
+            "checkpoint_resume_eligible": False,
+            "checkpoint_resume_rejected_reason": "checkpoint_schema_mismatch",
+        }
+    contract = _qwen_command_contract(command)
+    if contract is None:
+        return {
+            "checkpoint_path": str(checkpoint),
+            "checkpoint_resume_eligible": False,
+            "checkpoint_resume_rejected_reason": "qwen_command_contract_unavailable",
+        }
+    if not qwen_checkpoint_matches(payload, contract):
+        return {
+            "checkpoint_path": str(checkpoint),
+            "checkpoint_resume_eligible": False,
+            "checkpoint_resume_rejected_reason": "execution_contract_mismatch",
+        }
+    declared_successful = sorted(
+        {int(value) for value in payload.get("successful_chunk_indexes") or []}
+    )
+    result_successful = sorted(
+        {
+            int(row.get("chunk_index") or 0)
+            for row in payload.get("results") or []
+            if isinstance(row, dict)
+        }
+    )
+    if declared_successful and declared_successful != result_successful:
+        return {
+            "checkpoint_path": str(checkpoint),
+            "checkpoint_resume_eligible": False,
+            "checkpoint_resume_rejected_reason": "checkpoint_result_index_mismatch",
+        }
+    successful = result_successful
+    failed_count = int(payload.get("failed_chunk_count") or len(payload.get("failed_chunks") or []))
+    requested_count = int(payload.get("requested_chunk_count") or 0)
+    successful_count = len(successful)
+    complete = bool(
+        requested_count > 0
+        and failed_count == 0
+        and successful_count >= requested_count
+        and len(successful) >= requested_count
+    )
     return {
         "checkpoint_path": str(checkpoint),
+        "checkpoint_resume_eligible": True,
         "checkpoint_status": str(payload.get("status") or "running"),
-        "checkpoint_successful_chunk_count": int(payload.get("successful_chunk_count") or len(successful)),
+        "checkpoint_requested_chunk_count": requested_count,
+        "checkpoint_successful_chunk_count": successful_count,
         "checkpoint_successful_chunk_indexes": successful,
-        "checkpoint_failed_chunk_count": int(payload.get("failed_chunk_count") or 0),
+        "checkpoint_failed_chunk_count": failed_count,
+        "checkpoint_complete": complete,
+        "resumed_from_checkpoint": bool(successful or failed_count),
         "partial_output_preserved": bool(successful),
-        "resume_command": list(command),
     }
+
+
+def _qwen_completed_output_matches(
+    output: Path,
+    command: list[str],
+    checkpoint_details: dict[str, Any],
+) -> bool:
+    if not output.is_file():
+        return False
+    contract = _qwen_command_contract(command)
+    if contract is None:
+        return False
+    try:
+        payload = read_json(output)
+    except Exception:
+        return False
+    if not isinstance(payload, dict):
+        return False
+    expected_indexes = checkpoint_details.get("checkpoint_successful_chunk_indexes") or []
+    actual_indexes = sorted({int(value) for value in payload.get("successful_chunk_indexes") or []})
+    return bool(
+        str(payload.get("schema") or "") == QWEN_RAW_OUTPUT_SCHEMA
+        and str(payload.get("status") or "") == "completed"
+        and str(payload.get("input_path") or "") == str(contract["input_identity"]["path"])
+        and str(payload.get("model") or "") == str(contract["model"])
+        and int(payload.get("chunk_seconds") or 0) == int(contract["chunk_seconds"])
+        and int(payload.get("failed_chunk_count") or 0) == 0
+        and actual_indexes == expected_indexes
+    )
+
+
+def _restore_qwen_output_from_checkpoint(
+    output: Path,
+    command: list[str],
+    checkpoint_details: dict[str, Any],
+) -> None:
+    checkpoint_path = Path(str(checkpoint_details["checkpoint_path"]))
+    checkpoint = read_json(checkpoint_path)
+    contract = _qwen_command_contract(command)
+    if not isinstance(checkpoint, dict) or contract is None:
+        raise ValueError("Qwen checkpoint cannot be restored without a matching execution contract")
+    if not qwen_checkpoint_matches(checkpoint, contract):
+        raise ValueError("Qwen checkpoint execution contract changed before recovery")
+    rows = [dict(row) for row in checkpoint.get("results") or [] if isinstance(row, dict)]
+    failed_chunks = [
+        dict(row) for row in checkpoint.get("failed_chunks") or [] if isinstance(row, dict)
+    ]
+    successful = sorted({int(row.get("chunk_index") or 0) for row in rows})
+    requested_count = int(checkpoint.get("requested_chunk_count") or 0)
+    if requested_count <= 0 or len(successful) < requested_count or failed_chunks:
+        raise ValueError("Qwen checkpoint is not complete")
+    payload = {
+        "schema": QWEN_RAW_OUTPUT_SCHEMA,
+        "provider": "qwen3-asr",
+        "model": contract["model"],
+        "forced_aligner": contract["forced_aligner"],
+        "chunk_seconds": contract["chunk_seconds"],
+        "chunk_count": requested_count,
+        "max_chunk_attempts": _command_int_option(command, "--max-chunk-attempts", default=2),
+        "retry_exhausted_chunk_count": 0,
+        "checkpoint_path": str(checkpoint_path),
+        "resumed_from_checkpoint": True,
+        "checkpointed_successful_chunk_count": len(successful),
+        "successful_chunk_count": len(successful),
+        "failed_chunk_count": 0,
+        "successful_chunk_indexes": successful,
+        "device": "not_reexecuted",
+        "dtype": contract["dtype"],
+        "input_path": contract["input_identity"]["path"],
+        "input_identity": contract["input_identity"],
+        "ok": True,
+        "usable": True,
+        "status": "completed",
+        "results": rows,
+        "segments": [segment for row in rows for segment in row.get("segments") or []],
+        "text": "\n".join(str(row.get("text") or "") for row in rows).strip(),
+        "failed_chunks": [],
+        "gaps": [],
+        "retry_commands": [],
+        "fallback": {"recommended_model": "Qwen/Qwen3-ASR-0.6B", "automatic": False},
+        "checkpoint_recovery": "raw_output_rebuilt_without_model_execution",
+    }
+    write_json(output, payload)
+
+
+def _qwen_checkpoint_timeout_details(expected_output: Path, command: list[str]) -> dict[str, Any]:
+    details = _qwen_checkpoint_resume_details(expected_output, command)
+    if not details:
+        return {}
+    details["resume_command"] = list(command)
+    return details
 
 def _timeout_stream(value: Any) -> str:
     if isinstance(value, bytes):

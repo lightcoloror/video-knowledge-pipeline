@@ -150,3 +150,13 @@ Python 薄适配、清单、checkpoint identity 与现有 FunASR runner 的编�
 - 证据：`blind-review-20260730/audio-clips` 已生成 11/11 个 16 kHz 单声道 PCM WAV，失败 0，总计 8,000,854 字节；ffprobe 时长逐项等于计划窗口，范围 16–35 秒。每个文件均已计算 SHA-256。移动盘直读尝试生成 0/11，已停止；缓存 chunk 路线完成 11/11。
 - 生效范围：仅 `.local/asr-overlap-silence-benchmark-20260730/blind-review-20260730` 的人工评估证据；不修改候选逐字稿、参考稿、生产 Bundle、模型路由或授权。
 - 剩余缺口：音频包已可听，但 A/B 选择仍必须由人工依据音频完成；参考稿继续只用于评估，不能进入 ASR prompt、热词或纠错证据。
+
+## 2026-08-18 `run-asr-plan` checkpoint resume and idempotent rerun
+
+- Updated by: Codex (GPT-5.6 Sol), 2026-08-18 19:03:40 +08:00.
+- Intent: let an interrupted ultra-long local Qwen ASR plan continue from durable successful chunks and still produce the final raw JSON after an outer timeout.
+- Decision: keep `qwen3_asr_python_runner` as the only chunk state machine. `run-asr-plan` now validates and reports its checkpoint, delegates partial continuation to that runner, rebuilds a missing final output from a complete checkpoint without loading a model, and reuses a matching completed output byte-for-byte. New semantic contracts bind context by SHA-256 rather than copying its text. `--no-resume` is the explicit opt-out.
+- Reason: an outer process timeout can preserve dozens of valid chunk results while withholding the final JSON. Restarting all chunks wastes hours and creates unnecessary output drift; a second checkpoint implementation would create conflicting truth.
+- Evidence: synthetic regressions cover partial continuation metadata, complete-checkpoint recovery without child execution, byte-stable completed reruns, explicit fresh execution, semantic-contract drift rejection, and legacy checkpoint compatibility. No real media, local model, Provider, upload, network, or publication is involved.
+- Effective scope: local Qwen full-ASR plans and their derived raw output/run evidence. Canonical transcript arbitration, Timeline, other ASR engines, model selection, retry limits, and media files are unchanged.
+- Rollback: remove the top-level checkpoint inspection/restoration helpers and CLI flag, then stop writing the new `execution_contract`; legacy checkpoint fields remain readable and no source media or canonical transcript requires rollback.
