@@ -1,0 +1,87 @@
+{
+  "schema": "video_knowledge_pipeline.prepush_review.v1",
+  "review_id": "VKP-MASTER-PREPUSH-AUDIT-20260820-01",
+  "generated_at": "2026-08-20T13:15:46+08:00",
+  "reviewer": "Codex owner",
+  "remote": "origin/master",
+  "remote_base_commit": "e526d5a8cb84d326297bce7d9ba7635e11090fc4",
+  "reviewed_head_commit": "dd212c7fa754439ca6a1f80cdcdf0f42ffbd7807",
+  "review_fix_commit": "this_selective_review_commit_hash_is_returned_out_of_band",
+  "reviewed_commits": [
+    "b1fc36b885dbf2edf5ebf9f7fbfd7e72dadf08e9",
+    "f5cb9034407177c8271203de7f5779694c02c710",
+    "31b7e437aaf86fce17e265dbcd16a4ff38f9de00",
+    "eaa4f27de592958d79dd7a3611e7d5b3cab91045",
+    "26c6f432946facaf1f6701d729a329669641b797",
+    "dd212c7fa754439ca6a1f80cdcdf0f42ffbd7807"
+  ],
+  "scope": {
+    "commit_count": 6,
+    "changed_file_count": 60,
+    "areas": [
+      "production artifact hard gates and source-review lineage",
+      "review-only long-video fast segmentation and explicit new-copy render",
+      "resumable ASR plan checkpoints",
+      "recoverable Qwen source windows",
+      "local video/OCR/VLM failure and capability reporting"
+    ]
+  },
+  "review_result": "approved_for_fast_forward_push_after_review_fix",
+  "blocking_findings": [],
+  "resolved_findings": [
+    {
+      "severity": "P1",
+      "finding": "Tracked documentation and one adapter default exposed machine-specific absolute paths.",
+      "resolution": "Replace documentation/receipt paths with logical placeholders and resolve the adapter default through source_reviews_root while preserving its environment override.",
+      "evidence": "The initial publication-safety run failed; the combined post-fix run passed all 96 selected tests."
+    }
+  ],
+  "verification": {
+    "initial_publication_safety": {
+      "run_id": "codex-test-59180-2410ce0b096f4cb6b8c462ac3cb99b0d",
+      "result": "1 failed, 6 passed; failure was the machine-specific path finding fixed by this review"
+    },
+    "combined_post_fix": {
+      "run_id": "codex-test-61072-fc8b8544e4394529ae0ce12e3f30600d",
+      "result": "96 passed"
+    },
+    "final_publication_and_adapter": {
+      "run_id": "codex-test-10956-92c6a3eafa4143b98fafcbddcb546166",
+      "result": "13 passed after adding this review receipt"
+    },
+    "ruff": "39 changed Python files passed",
+    "python_ast": "39 changed Python files parsed",
+    "json_parse": "10 changed JSON files parsed before adding this review receipt",
+    "diff_check": "passed",
+    "publication_safety": "passed in combined post-fix run",
+    "secret_and_private_fixture_scan": "passed in publication-safety suite"
+  },
+  "execution_boundary_review": {
+    "source_media_overwrite_blocked": true,
+    "long_video_render_requires_human_confirmation_and_execute": true,
+    "asr_and_qwen_execution_remain_explicit": true,
+    "local_vlm_requires_explicit_loopback_provider": true,
+    "truncated_vlm_output_is_incomplete": true,
+    "provider_or_network_called_during_review": false,
+    "real_media_used_during_review": false,
+    "dependencies_installed_during_review": false
+  },
+  "qwen_acceptance": {
+    "implementation_commit": "26c6f432946facaf1f6701d729a329669641b797",
+    "code_review_status": "accepted_for_push_with_synthetic_offline_evidence",
+    "real_runtime_status": "pending_operator_gated_validation",
+    "state_owner": "qwen3_asr_python_runner checkpoint remains the only Qwen window execution state owner"
+  },
+  "remaining_non_blocking_gates": [
+    "Representative real long-video performance and recovery validation remains pending.",
+    "Real ffmpeg, OCR language-pack and loopback VLM smoke runs remain operator-gated.",
+    "Existing third-party requests/jieba and pytest cache_dir warnings remain environment-level warnings."
+  ],
+  "push_boundary": {
+    "fast_forward_only": true,
+    "force_push": false,
+    "uncommitted_preexisting_work_included": false,
+    "target": "origin/master"
+  },
+  "rollback": "Revert the review-fix commit to remove the portability changes and this receipt; do not rewrite the six reviewed implementation commits."
+}

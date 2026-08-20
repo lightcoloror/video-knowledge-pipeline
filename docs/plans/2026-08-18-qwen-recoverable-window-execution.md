@@ -15,7 +15,7 @@
 - Start from commit `31b7e437aaf86fce17e265dbcd16a4ff38f9de00`; first report any drift.
 - Preserve the existing dirty worktree. Do not reset, stash, checkout, or edit Provider files, `tests/test_asr_pipeline.py`, guided-tour files, or `scripts/run-tests-managed.ps1` unless the owner explicitly revises scope.
 - Do not run real media, a local model, a Provider, network access, upload, publication, configuration changes, or push.
-- Use synthetic fixtures and the stable managed Windows test entry `D:\used-by-codex\scripts\windows-test-runtime.ps1`. The existing untracked project wrapper is outside task scope. A missing dependency is an environment blocker, not permission to install packages.
+- Use synthetic fixtures and the stable managed Windows test entry `<managed-test-runtime>\windows-test-runtime.ps1`. The existing untracked project wrapper is outside task scope. A missing dependency is an environment blocker, not permission to install packages.
 - Update the handoff `context.md` status and write one independent completion receipt in `outputs/`.
 
 ### Task 1: Write failing window-isolation tests
@@ -43,7 +43,7 @@ Return a local timestamp `[1.0, 2.0]` for window `[30.0, 60.0]`; assert the publ
 
 **Step 5: Verify the tests fail before implementation**
 
-Run through `D:\used-by-codex\scripts\windows-test-runtime.ps1 adapter` with pytest arguments `tests/test_qwen_recoverable_windows.py -q -p no:cacheprovider`. Expected: failures because the runner still calls batch `_audio_chunks`.
+Run through `<managed-test-runtime>\windows-test-runtime.ps1 adapter` with pytest arguments `tests/test_qwen_recoverable_windows.py -q -p no:cacheprovider`. Expected: failures because the runner still calls batch `_audio_chunks`.
 
 ### Task 2: Extract reusable fixed-window primitives
 

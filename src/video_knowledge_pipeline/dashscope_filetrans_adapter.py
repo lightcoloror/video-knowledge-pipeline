@@ -10,16 +10,15 @@ from typing import Any, Callable
 from urllib.parse import urlsplit
 
 from .model_runtime_client import consume_consented_remote_runtime_grant
+from .path_defaults import source_reviews_root
 
 
 SCHEMA = "video_knowledge_pipeline.dashscope_filetrans_adapter.v1"
 UPSTREAM_COMMIT = "949bc84058cdae1d9c021c50203e6d2742f9392c"
 UPSTREAM_SCRIPT = "generate_subtitle_qwen_api.py"
 DEFAULT_UPSTREAM_ROOT = Path(
-    os.environ.get(
-        "VKP_MOYS_ASR_WORKFLOW_ROOT",
-        r"D:\used-by-codex\source-reviews\moys-asr-workflow-20260810",
-    )
+    os.environ.get("VKP_MOYS_ASR_WORKFLOW_ROOT")
+    or source_reviews_root() / "moys-asr-workflow-20260810"
 )
 SUPPORTED_MODELS = frozenset(
     {

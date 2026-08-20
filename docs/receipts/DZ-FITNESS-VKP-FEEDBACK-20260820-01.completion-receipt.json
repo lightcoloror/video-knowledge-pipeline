@@ -10,11 +10,11 @@
   "implementation_commit": "this_selective_commit_hash_is_returned_out_of_band",
   "authority": {
     "source_feedback": {
-      "path": "C:\\Users\\lightcolor\\WorkBuddy\\2026-08-19-14-30-47\\dz-fitness\\本地工具反馈文档.md",
+      "path": "<external-feedback>/dz-fitness/本地工具反馈文档.md",
       "sha256": "657caad19c0e586ccc3e0625075833c8d9f3f418f2a172f4fae400417c36b515"
     },
     "owner_triage": {
-      "path": "C:\\Users\\lightcolor\\Documents\\Codex\\2026-08-18\\vkp-continuation-3\\outputs\\QUOTA-RECOVERY-VKP-20260820-01-owner-triage.md",
+      "path": "<owner-output>/QUOTA-RECOVERY-VKP-20260820-01-owner-triage.md",
       "sha256": "0164c46bb30c6c22afc7024cd9da3b618d94d93083072ec8ab19ca665b81867a"
     }
   },
