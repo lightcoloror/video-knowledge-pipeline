@@ -1244,6 +1244,7 @@ def main(argv: list[str] | None = None) -> int:
             language=args.language,
             captiocr_root=args.captiocr_root,
             limit=args.limit,
+            apply_mode=args.apply_mode,
         )
     elif args.command == "run-screen-text-recovery":
         result = run_screen_text_recovery(
@@ -4010,6 +4011,7 @@ def build_parser() -> argparse.ArgumentParser:
     ocr.add_argument("--language", default="chi_sim+eng")
     ocr.add_argument("--captiocr-root")
     ocr.add_argument("--limit", type=int, default=0)
+    ocr.add_argument("--apply-mode", choices=["merge", "replace_snapshot"], default="merge")
 
     screen_text = sub.add_parser("run-screen-text-recovery", help="Plan or execute targeted crop-based screen text recovery")
     screen_text.add_argument("bundle_dir")

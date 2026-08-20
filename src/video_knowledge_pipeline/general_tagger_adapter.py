@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .models import now_iso
-from .path_defaults import local_model_root, tool_source_review_root
+from .path_defaults import local_model_root, source_reviews_root, tool_source_review_root
 from .storage import bundle_write_lock, read_json, write_json
 from .tagger_import import import_tagger_annotations
 from .file_hash import sha256_file
@@ -27,10 +27,12 @@ def general_tagger_status(
     *,
     source_root: str | Path | None = None,
     checkpoint_path: str | Path | None = None,
+    source_inventory_path: str | Path | None = None,
 ) -> dict[str, Any]:
-    source = _source_root(source_root)
-    checkpoint = _checkpoint(checkpoint_path)
-    tokenizer = _tokenizer_root()
+    discovery = _inventory_model_discovery(source_inventory_path)
+    source = _source_root(source_root, discovery=discovery)
+    checkpoint = _checkpoint(checkpoint_path, discovery=discovery)
+    tokenizer = _tokenizer_root(discovery=discovery)
     blockers: list[str] = []
     if source is None:
         blockers.append("recognize_anything_source_missing")
@@ -48,6 +50,7 @@ def general_tagger_status(
         "source_root": str(source or ""),
         "checkpoint_path": str(checkpoint or ""),
         "tokenizer_root": str(tokenizer or ""),
+        "model_discovery": discovery,
         "threshold_floor": DEFAULT_THRESHOLD_FLOOR,
         "blockers": blockers,
         "compatibility_baselines": list(COMPATIBILITY_BASELINES),
@@ -285,33 +288,102 @@ def _first_image(root: Path, values: list[Any]) -> Path | None:
     return None
 
 
-def _source_root(value: str | Path | None) -> Path | None:
+def _source_root(
+    value: str | Path | None,
+    *,
+    discovery: dict[str, Any] | None = None,
+) -> Path | None:
     candidate = value or os.environ.get("VKP_RECOGNIZE_ANYTHING_SOURCE")
     if candidate:
         path = Path(candidate).expanduser()
         if path.exists() and path.is_dir():
             return path.resolve()
+    inventory_path = str((discovery or {}).get("source_root") or "")
+    candidate_path = Path(inventory_path).expanduser() if inventory_path else None
+    if candidate_path and candidate_path.is_dir():
+        return candidate_path.resolve()
     return DEFAULT_SOURCE_ROOT.resolve() if DEFAULT_SOURCE_ROOT.exists() else None
 
 
-def _checkpoint(value: str | Path | None) -> Path | None:
+def _checkpoint(
+    value: str | Path | None,
+    *,
+    discovery: dict[str, Any] | None = None,
+) -> Path | None:
     candidate = value or os.environ.get("VKP_RAM_PLUS_CHECKPOINT")
     if candidate:
         path = Path(candidate).expanduser()
         if path.exists() and path.is_file():
             return path.resolve()
+    inventory_path = str((discovery or {}).get("checkpoint_path") or "")
+    candidate_path = Path(inventory_path).expanduser() if inventory_path else None
+    if candidate_path and candidate_path.is_file():
+        return candidate_path.resolve()
     return DEFAULT_CHECKPOINT.resolve() if DEFAULT_CHECKPOINT.exists() else None
 
 
-def _tokenizer_root() -> Path | None:
+def _tokenizer_root(*, discovery: dict[str, Any] | None = None) -> Path | None:
     candidate = os.environ.get("VKP_RAM_PLUS_TOKENIZER")
     if candidate:
         path = Path(candidate).expanduser()
         if path.exists() and path.is_dir() and (path / "vocab.txt").is_file():
             return path.resolve()
+    inventory_path = str((discovery or {}).get("tokenizer_root") or "")
+    candidate_path = Path(inventory_path).expanduser() if inventory_path else None
+    if candidate_path and candidate_path.is_dir() and (candidate_path / "vocab.txt").is_file():
+        return candidate_path.resolve()
     if DEFAULT_TOKENIZER_ROOT.exists() and (DEFAULT_TOKENIZER_ROOT / "vocab.txt").is_file():
         return DEFAULT_TOKENIZER_ROOT.resolve()
     return None
+
+
+def _inventory_model_discovery(value: str | Path | None = None) -> dict[str, Any]:
+    inventory_path = (
+        Path(value).expanduser().resolve()
+        if value is not None
+        else (source_reviews_root() / "SOURCE_INVENTORY.json").resolve()
+    )
+    result = {
+        "source": "source_inventory",
+        "inventory_path": str(inventory_path),
+        "inventory_available": inventory_path.is_file(),
+        "entry_found": False,
+        "source_root": "",
+        "deployment_path": "",
+        "checkpoint_path": "",
+        "tokenizer_root": "",
+    }
+    if not inventory_path.is_file():
+        return result
+    try:
+        payload = read_json(inventory_path)
+    except (OSError, ValueError):
+        return result
+    entries = payload.get("entries") if isinstance(payload, dict) else []
+    entry = next(
+        (
+            row
+            for row in entries or []
+            if isinstance(row, dict) and str(row.get("name") or "").casefold() == "recognize-anything"
+        ),
+        None,
+    )
+    if not isinstance(entry, dict):
+        return result
+    source_text = str(entry.get("local_path") or "").strip()
+    deployment_text = str(entry.get("deployment_path") or "").strip()
+    source = Path(source_text).expanduser() if source_text else None
+    deployment = Path(deployment_text).expanduser() if deployment_text else None
+    checkpoint = deployment / "ram_plus_swin_large_14m.pth" if deployment else None
+    tokenizer = deployment.parent / "bert-base-uncased-tokenizer" if deployment else None
+    return {
+        **result,
+        "entry_found": True,
+        "source_root": str(source.resolve()) if source and source.is_dir() else "",
+        "deployment_path": str(deployment.resolve()) if deployment and deployment.is_dir() else "",
+        "checkpoint_path": str(checkpoint.resolve()) if checkpoint and checkpoint.is_file() else "",
+        "tokenizer_root": str(tokenizer.resolve()) if tokenizer and tokenizer.is_dir() and (tokenizer / "vocab.txt").is_file() else "",
+    }
 
 
 def _write_result(root: Path, result: dict[str, Any]) -> None:

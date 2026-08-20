@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import video_knowledge_pipeline.ocr_backfill as ocr_backfill
@@ -70,6 +71,7 @@ def test_ocr_missing_language_fails_before_subprocess_and_is_visible(tmp_path: P
         "language_ready": False,
         "status": "missing_language_packs",
     }
+    monkeypatch.setattr(ocr_backfill, "resolve_tesseract_runtime", lambda **kwargs: tesseract)
     monkeypatch.setattr(
         ocr_backfill,
         "_load_captiocr_runner",
@@ -101,6 +103,77 @@ def test_ocr_missing_language_fails_before_subprocess_and_is_visible(tmp_path: P
     report = Path(result["report_path"]).read_text(encoding="utf-8")
     assert "missing_language_packs" in report
     assert "chi_sim" in report
+
+
+def test_multilingual_ocr_bypasses_captiocr_and_runs_tesseract_once(tmp_path: Path, monkeypatch) -> None:
+    bundle = _bundle(tmp_path)
+    tesseract = {
+        "available": True,
+        "runtime_available": True,
+        "cmd": str(tmp_path / "tesseract.exe"),
+        "tessdata_prefix": str(tmp_path / "tessdata"),
+        "requested_languages": ["chi_sim", "eng"],
+        "installed_languages": ["chi_sim", "eng"],
+        "missing_languages": [],
+        "language_ready": True,
+        "status": "ready",
+    }
+    monkeypatch.setattr(ocr_backfill, "resolve_tesseract_runtime", lambda **kwargs: tesseract)
+    monkeypatch.setattr(
+        ocr_backfill,
+        "_load_captiocr_runner",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("CaptiOCR must be bypassed for multilingual OCR")),
+    )
+    commands: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="中文 English", stderr="")
+
+    monkeypatch.setattr(ocr_backfill.subprocess, "run", fake_run)
+
+    result = ocr_backfill.run_ocr_backfill(bundle, execute=True, language="chi_sim+eng")
+
+    assert result["ok"] is True
+    assert result["runner"]["name"] == "tesseract_cli"
+    assert result["runner"]["route_reason"] == "multilingual_request_requires_tesseract_cli"
+    assert result["capabilities"]["captiocr"]["available"] is False
+    assert commands == [[tesseract["cmd"], str((bundle / "assets" / "frame.jpg").resolve()), "stdout", "-l", "chi_sim+eng"]]
+    timeline = json.loads((bundle / "timeline.json").read_text(encoding="utf-8"))
+    assert timeline[0]["visual_text"] == "中文 English"
+
+
+def test_multilingual_missing_pack_bypasses_captiocr_and_subprocess(tmp_path: Path, monkeypatch) -> None:
+    bundle = _bundle(tmp_path)
+    tesseract = {
+        "available": True,
+        "runtime_available": True,
+        "cmd": str(tmp_path / "tesseract.exe"),
+        "tessdata_prefix": str(tmp_path / "tessdata"),
+        "requested_languages": ["chi_sim", "eng"],
+        "installed_languages": ["eng"],
+        "missing_languages": ["chi_sim"],
+        "language_ready": False,
+        "status": "missing_language_packs",
+    }
+    monkeypatch.setattr(ocr_backfill, "resolve_tesseract_runtime", lambda **kwargs: tesseract)
+    monkeypatch.setattr(
+        ocr_backfill,
+        "_load_captiocr_runner",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("CaptiOCR must be bypassed for multilingual OCR")),
+    )
+    monkeypatch.setattr(
+        ocr_backfill.subprocess,
+        "run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("subprocess must not run")),
+    )
+
+    result = ocr_backfill.run_ocr_backfill(bundle, execute=True, language="chi_sim+eng")
+
+    assert result["ok"] is False
+    assert result["status"] == "missing_language_packs"
+    assert result["runner"]["name"] == "tesseract_cli"
+    assert result["runner"]["route_reason"] == "multilingual_request_requires_tesseract_cli"
 
 
 def test_ocr_reports_both_backends_unavailable(tmp_path: Path, monkeypatch) -> None:

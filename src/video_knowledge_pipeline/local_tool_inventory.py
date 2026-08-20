@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import tomllib
 from pathlib import Path
@@ -11,19 +13,65 @@ from typing import Any
 
 from .asr_runner import detect_asr_runners
 from .captiocr_resolver import resolve_captiocr_root
+from .general_tagger_adapter import general_tagger_status
 from .markdown_text import markdown_table_cell as _md_cell
 from .media_tools import resolve_media_tool, resolve_tesseract
 from .models import now_iso
-from .path_defaults import tool_source_review_root, workspace_root
+from .path_defaults import source_reviews_root, tool_source_review_root, workspace_root
 from .storage import write_json
 from .tool_research import recommended_trial_order
 
 LOCAL_TOOL_INVENTORY_SCHEMA = "lecture_local_tool_inventory.v1"
 LOCAL_RUNTIME_PREFLIGHT_SCHEMA = "video_knowledge_pipeline.local_runtime_preflight.v1"
 
+_HEAVY_MODEL_PROBE_SCRIPT = r"""
+import importlib.metadata
+import importlib.util
+import json
+import platform
+from pathlib import Path
 
-def local_runtime_preflight(project_root: str | Path | None = None) -> dict[str, Any]:
-    """Inspect the local Python/media runtime without installing or executing tools."""
+module_names = ["torch", "transformers", "timm", "fairscale", "PIL"]
+modules = {name: importlib.util.find_spec(name) is not None for name in module_names}
+required = {
+    "modeling_utils.PreTrainedModel": False,
+    "pytorch_utils.apply_chunking_to_forward": False,
+    "pytorch_utils.find_pruneable_heads_and_indices": False,
+    "pytorch_utils.prune_linear_layer": False,
+}
+version = ""
+error = ""
+if modules["transformers"]:
+    try:
+        version = importlib.metadata.version("transformers")
+        distribution = importlib.metadata.distribution("transformers")
+        package_root = Path(distribution.locate_file("transformers"))
+        modeling_source = (package_root / "modeling_utils.py").read_text(encoding="utf-8", errors="replace")
+        pytorch_source = (package_root / "pytorch_utils.py").read_text(encoding="utf-8", errors="replace")
+        required["modeling_utils.PreTrainedModel"] = "class PreTrainedModel" in modeling_source
+        required["pytorch_utils.apply_chunking_to_forward"] = "def apply_chunking_to_forward" in pytorch_source
+        required["pytorch_utils.find_pruneable_heads_and_indices"] = "def find_pruneable_heads_and_indices" in pytorch_source
+        required["pytorch_utils.prune_linear_layer"] = "def prune_linear_layer" in pytorch_source
+    except Exception as exc:
+        error = type(exc).__name__ + ": " + str(exc)
+compatible = all(modules.values()) and all(required.values()) and not error
+print(json.dumps({
+    "ok": compatible,
+    "status": "ready" if compatible else "incompatible",
+    "python_version": platform.python_version(),
+    "modules": modules,
+    "transformers": {"version": version, "compatible": all(required.values()) and not error, "required_symbols": required},
+    "error": error,
+}))
+""".strip()
+
+
+def local_runtime_preflight(
+    project_root: str | Path | None = None,
+    *,
+    source_inventory_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """Inspect local runtimes without installs, media processing, model loading, or GPU setup."""
     root = (
         Path(project_root).expanduser().resolve()
         if project_root is not None
@@ -42,6 +90,16 @@ def local_runtime_preflight(project_root: str | Path | None = None) -> dict[str,
     ffprobe = resolve_media_tool("ffprobe")
     tesseract = resolve_tesseract()
     uv = shutil.which("uv") or ""
+    inventory_path = (
+        Path(source_inventory_path).expanduser().resolve()
+        if source_inventory_path is not None
+        else (source_reviews_root() / "SOURCE_INVENTORY.json").resolve()
+    )
+    tagger = general_tagger_status(source_inventory_path=inventory_path)
+    heavy_python = _resolve_heavy_model_python(root)
+    heavy_runtime = _probe_heavy_model_runtime(Path(str(heavy_python.get("executable") or "")))
+    heavy_modules_ready = all(bool(value) for value in (heavy_runtime.get("modules") or {}).values())
+    transformers_compatible = bool((heavy_runtime.get("transformers") or {}).get("compatible"))
     checks = [
         _runtime_check("python:version", sys.version_info >= (3, 11), f"Python {'.'.join(str(value) for value in sys.version_info[:3])}"),
         _runtime_check("python:executable", resolved_executable.is_absolute() and resolved_executable.exists(), str(resolved_executable)),
@@ -49,6 +107,27 @@ def local_runtime_preflight(project_root: str | Path | None = None) -> dict[str,
         _runtime_check("dependencies:core", not missing_dependencies, ",".join(missing_dependencies) or "all core imports available"),
         _runtime_check("media:ffmpeg", bool(ffmpeg), ffmpeg or "FFMPEG_BINARY/LECTURE_FFMPEG_DIR not resolved"),
         _runtime_check("media:ffprobe", bool(ffprobe), ffprobe or "FFPROBE_BINARY/LECTURE_FFMPEG_DIR not resolved"),
+        _runtime_check(
+            "general_tagger:assets",
+            tagger.get("status") == "ready",
+            ",".join(str(item) for item in tagger.get("blockers") or []) or "RAM++ source, checkpoint, and tokenizer discovered",
+        ),
+        _runtime_check(
+            "heavy_model:python",
+            bool(heavy_python.get("exists")),
+            str(heavy_python.get("source") or "heavy-model interpreter not found"),
+        ),
+        _runtime_check(
+            "heavy_model:dependencies",
+            heavy_modules_ready,
+            ",".join(name for name, available in (heavy_runtime.get("modules") or {}).items() if not available)
+            or "heavy-model imports available",
+        ),
+        _runtime_check(
+            "heavy_model:transformers_compatibility",
+            transformers_compatible,
+            str((heavy_runtime.get("transformers") or {}).get("version") or heavy_runtime.get("error") or "not compatible"),
+        ),
     ]
     failed_checks = [row["check_id"] for row in checks if row["status"] == "failed"]
     recovery_commands: list[dict[str, str]] = []
@@ -76,6 +155,22 @@ def local_runtime_preflight(project_root: str | Path | None = None) -> dict[str,
                 "reason": "VKP resolves media binaries through media_tools; no machine path is embedded here.",
             }
         )
+    if tagger.get("status") != "ready":
+        recovery_commands.append(
+            {
+                "key": "configure_ram_plus_assets",
+                "command": "Set VKP_LOCAL_MODEL_ROOT=<model-root> or repair the recognize-anything deployment_path in SOURCE_INVENTORY.json, then rerun local-runtime-preflight.",
+                "reason": "RAM++ blockers: " + ", ".join(str(item) for item in tagger.get("blockers") or []),
+            }
+        )
+    if not heavy_python.get("exists") or not heavy_modules_ready or not transformers_compatible:
+        recovery_commands.append(
+            {
+                "key": "repair_heavy_model_runtime",
+                "command": "Set VKP_HEAVY_MODEL_PYTHON=<compatible-python>, verify torch/transformers/timm/fairscale/Pillow, and apply the RAM++ transformers import-layout patch before rerunning local-runtime-preflight.",
+                "reason": "The doctor reports compatibility only; it never installs into or mutates an existing heavy-model environment.",
+            }
+        )
     ok = not failed_checks
     return {
         "schema": LOCAL_RUNTIME_PREFLIGHT_SCHEMA,
@@ -99,6 +194,7 @@ def local_runtime_preflight(project_root: str | Path | None = None) -> dict[str,
                 "pyvenv_cfg_exists": pyvenv_cfg.is_file(),
             },
             "uv": {"available": bool(uv), "path": str(Path(uv).resolve()) if uv else ""},
+            "heavy_model_python": heavy_python,
         },
         "capabilities": {
             "media": {
@@ -110,6 +206,8 @@ def local_runtime_preflight(project_root: str | Path | None = None) -> dict[str,
                 "required": dependency_rows,
                 "missing": missing_dependencies,
             },
+            "general_tagger": tagger,
+            "heavy_model_runtime": heavy_runtime,
         },
         "checks": checks,
         "failed_checks": failed_checks,
@@ -120,8 +218,80 @@ def local_runtime_preflight(project_root: str | Path | None = None) -> dict[str,
             "processes_media": False,
             "reads_configuration_secrets": False,
             "makes_network_request": False,
+            "loads_model": False,
+            "initializes_gpu": False,
+            "starts_probe_process": bool(heavy_python.get("exists")),
         },
     }
+
+
+def _resolve_heavy_model_python(project_root: Path) -> dict[str, Any]:
+    configured = str(os.environ.get("VKP_HEAVY_MODEL_PYTHON") or "").strip()
+    candidates: list[tuple[str, Path]] = []
+    if configured:
+        candidates.append(("VKP_HEAVY_MODEL_PYTHON", Path(configured).expanduser()))
+    candidates.extend(
+        [
+            ("workspace_heavy_venv", workspace_root() / "tools" / "mineru-venv" / "Scripts" / "python.exe"),
+            ("workspace_heavy_venv", workspace_root() / "tools" / "mineru-venv" / "bin" / "python"),
+            ("project_venv", project_root / ".venv" / "Scripts" / "python.exe"),
+            ("project_venv", project_root / ".venv" / "bin" / "python"),
+            ("current_python", Path(sys.executable).expanduser()),
+        ]
+    )
+    seen: set[str] = set()
+    checked: list[dict[str, Any]] = []
+    for source, candidate in candidates:
+        key = str(candidate).casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        exists = candidate.is_file()
+        checked.append({"source": source, "path": str(candidate), "exists": exists})
+        if exists:
+            return {
+                "executable": str(candidate.resolve()),
+                "exists": True,
+                "source": source,
+                "checked": checked,
+            }
+    return {"executable": "", "exists": False, "source": "not_found", "checked": checked}
+
+
+def _probe_heavy_model_runtime(executable: Path) -> dict[str, Any]:
+    empty = {
+        "ok": False,
+        "status": "interpreter_unavailable",
+        "python_version": "",
+        "modules": {name: False for name in ("torch", "transformers", "timm", "fairscale", "PIL")},
+        "transformers": {"version": "", "compatible": False, "required_symbols": {}},
+        "error": "heavy-model interpreter not found",
+    }
+    if not executable.is_file():
+        return empty
+    try:
+        completed = subprocess.run(
+            [str(executable), "-c", _HEAVY_MODEL_PROBE_SCRIPT],
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            check=False,
+            timeout=20,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return {**empty, "status": "probe_failed", "error": f"{type(exc).__name__}: {exc}"}
+    if completed.returncode != 0:
+        return {
+            **empty,
+            "status": "probe_failed",
+            "error": str(completed.stderr or completed.stdout or f"exit {completed.returncode}").strip(),
+        }
+    try:
+        payload = json.loads(str(completed.stdout or "").strip())
+    except json.JSONDecodeError as exc:
+        return {**empty, "status": "probe_failed", "error": f"invalid probe JSON: {exc}"}
+    return dict(payload) if isinstance(payload, dict) else empty
 
 
 def local_tool_inventory(output_dir: str | Path | None = None, *, write: bool = False) -> dict[str, Any]:

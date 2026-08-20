@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import subprocess
 import sys
 from pathlib import Path
@@ -34,8 +35,13 @@ def run_ocr_backfill(
     language: str = "eng",
     captiocr_root: str | Path | None = None,
     limit: int = 0,
+    apply_mode: str = "merge",
 ) -> dict[str, Any]:
     """Preview, import, or execute OCR backfill for a WebUI lecture bundle."""
+    if apply_mode not in {"merge", "replace_snapshot"}:
+        raise ValueError("apply_mode must be merge or replace_snapshot")
+    if apply_mode == "replace_snapshot" and int(limit or 0) > 0:
+        raise ValueError("replace_snapshot requires full candidate coverage; limit must be 0")
     root = Path(bundle_dir).expanduser().resolve()
     manifest_path = root / "manifest.json"
     if not manifest_path.exists():
@@ -45,26 +51,39 @@ def run_ocr_backfill(
         raise ValueError("manifest.json must contain a JSON object")
 
     timeline = _read_timeline(root)
-    candidates = _ocr_candidates(root, timeline)
+    candidates = _ocr_candidates(root, timeline, include_existing=apply_mode == "replace_snapshot")
     if limit and int(limit) > 0:
         candidates = candidates[: int(limit)]
     template_path = _write_ocr_input_template(root, candidates)
     screen_text_recovery = _screen_text_recovery_plan(root, candidates)
-    imported_entries = _read_ocr_input(input_json) if input_json else []
+    imported = input_json is not None
+    imported_entries = _read_ocr_input(input_json) if imported else []
     results: list[dict[str, Any]]
     runner = {"available": False, "name": "captiocr", "error": ""}
     captiocr = resolve_captiocr_root(captiocr_root)
 
-    if imported_entries:
+    if imported:
         results = _results_from_imported_entries(imported_entries, candidates)
     elif execute:
         runner, results = _run_captiocr_candidates(candidates, language=language, captiocr_root=captiocr_root)
     else:
         results = [_candidate_result(candidate, executed=False, ok=False) for candidate in candidates]
 
-    backfill = _backfill_ocr_results(root, manifest, timeline, results) if imported_entries or execute else {
+    backfill = _backfill_ocr_results(
+        root,
+        manifest,
+        timeline,
+        results,
+        candidates=candidates,
+        apply_mode=apply_mode,
+        input_json=input_json,
+    ) if imported or execute else {
         "updated": 0,
         "updated_indexes": [],
+        "cleared": 0,
+        "cleared_indexes": [],
+        "preserved_indexes": [],
+        "applied": False,
         "source_package_updated": False,
     }
     timeline = _read_timeline(root)
@@ -77,9 +96,14 @@ def run_ocr_backfill(
     status, ok = _ocr_result_status(
         results,
         execute=execute,
-        imported=bool(imported_entries),
+        imported=imported,
         capabilities=capabilities,
     )
+    if apply_mode == "replace_snapshot":
+        if backfill.get("applied"):
+            status, ok = "replace_snapshot_applied", True
+        else:
+            status, ok = "replace_snapshot_incomplete", False
     recovery_commands = _ocr_recovery_commands(capabilities)
     summary = {
         "total": len(results),
@@ -87,11 +111,14 @@ def run_ocr_backfill(
         "input_json": str(Path(input_json).expanduser().resolve()) if input_json else "",
         "language": language,
         "limit": int(limit or 0),
+        "apply_mode": apply_mode,
         "succeeded": sum(1 for item in results if item.get("ok") and str(item.get("text") or "").strip()),
         "failed": sum(1 for item in results if item.get("executed") and not item.get("ok")),
         "planned": sum(1 for item in results if not item.get("executed")),
+        "cleared": int(backfill.get("cleared") or 0),
         "updated_at": now_iso(),
         "input_template_json": str(template_path),
+        "overwrite_receipt_path": str(backfill.get("overwrite_receipt_path") or ""),
         "status": status,
         "ok": ok,
     }
@@ -107,6 +134,7 @@ def run_ocr_backfill(
         "items": candidates,
         "last_run": summary,
         "last_backfill": {**backfill, "updated_at": now_iso()},
+        "overwrite_receipt_path": str(backfill.get("overwrite_receipt_path") or ""),
         "input_template_json": str(template_path),
         "screen_text_recovery": screen_text_recovery,
     }
@@ -164,6 +192,8 @@ def run_ocr_backfill(
         "capabilities": capabilities,
         "recovery_commands": recovery_commands,
         "backfill": backfill,
+        "apply_mode": apply_mode,
+        "overwrite_receipt_path": str(backfill.get("overwrite_receipt_path") or ""),
         "items": results,
         "screen_text_recovery": screen_text_recovery,
     }
@@ -177,7 +207,12 @@ def _read_timeline(root: Path) -> list[dict[str, Any]]:
     return [item for item in timeline if isinstance(item, dict)] if isinstance(timeline, list) else []
 
 
-def _ocr_candidates(root: Path, timeline: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _ocr_candidates(
+    root: Path,
+    timeline: list[dict[str, Any]],
+    *,
+    include_existing: bool = False,
+) -> list[dict[str, Any]]:
     candidates = []
     for index, item in enumerate(timeline, start=1):
         issues = _quality_issues(item)
@@ -185,9 +220,11 @@ def _ocr_candidates(root: Path, timeline: list[dict[str, Any]]) -> list[dict[str
         issues = _dedupe([*issues, *inferred])
         has_visual_text = bool(str(item.get("visual_text") or "").strip())
         image_path = _first_existing_image(root, item)
+        if include_existing and not image_path:
+            continue
         if not image_path and not (set(issues) & OCR_GAP_ISSUES):
             continue
-        if has_visual_text and not (set(issues) & OCR_GAP_ISSUES):
+        if has_visual_text and not (set(issues) & OCR_GAP_ISSUES) and not include_existing:
             continue
         candidates.append(
             {
@@ -474,6 +511,9 @@ def _results_from_imported_entries(entries: list[dict[str, Any]], candidates: li
                         else ("" if index else "missing timeline index")
                     )
                 ),
+                "authoritative_observation": bool(
+                    index and index in candidate_indexes and not wrapper_only and not needs_review
+                ),
             }
         )
     return results
@@ -509,6 +549,32 @@ def _run_captiocr_candidates(
     language: str,
     captiocr_root: str | Path | None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    if len(_requested_languages(language)) > 1:
+        tesseract = resolve_tesseract_runtime(required_languages=language)
+        route_reason = "multilingual_request_requires_tesseract_cli"
+        if not tesseract.get("language_ready") or not tesseract.get("cmd"):
+            status = str(tesseract.get("status") or "runtime_unavailable")
+            missing = ",".join(str(item) for item in tesseract.get("missing_languages") or [])
+            detail = f"{status}: {missing}" if missing else status
+            runner = {
+                "available": False,
+                "name": "tesseract_cli",
+                "tesseract": tesseract,
+                "route_reason": route_reason,
+                "fallback_from": "",
+                "error": detail,
+            }
+            return runner, [
+                {**_candidate_result(candidate, executed=True, ok=False), "stderr": detail}
+                for candidate in candidates
+            ]
+        return _run_tesseract_cli_candidates(
+            candidates,
+            language=language,
+            tesseract=tesseract,
+            previous_error="",
+            route_reason=route_reason,
+        )
     runner, processor, image_cls = _load_captiocr_runner(captiocr_root, language=language)
     if not runner.get("available"):
         tesseract = (
@@ -564,14 +630,16 @@ def _run_tesseract_cli_candidates(
     language: str,
     tesseract: dict[str, Any],
     previous_error: str,
+    route_reason: str = "captiocr_unavailable_fallback",
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     cmd = str(tesseract.get("cmd") or "")
     runner = {
         "available": bool(cmd),
         "name": "tesseract_cli",
         "tesseract": tesseract,
-        "fallback_from": "captiocr",
+        "fallback_from": "captiocr" if previous_error else "",
         "fallback_error": previous_error,
+        "route_reason": route_reason,
         "error": "" if cmd else "Tesseract command not found",
     }
     results = []
@@ -592,6 +660,7 @@ def _run_tesseract_cli_candidates(
         text = str(completed.stdout or "").strip()
         result["text"] = text
         result["ok"] = completed.returncode == 0 and bool(text)
+        result["authoritative_observation"] = completed.returncode == 0
         result["stderr"] = str(completed.stderr or "").strip() if completed.returncode != 0 else ""
         results.append(result)
     return runner, results
@@ -666,46 +735,164 @@ def _backfill_ocr_results(
     manifest: dict[str, Any],
     timeline: list[dict[str, Any]],
     results: list[dict[str, Any]],
+    *,
+    candidates: list[dict[str, Any]],
+    apply_mode: str,
+    input_json: str | Path | None,
 ) -> dict[str, Any]:
-    updated_indexes = _apply_ocr_results_to_timeline(timeline, results)
-    write_json(root / "timeline.json", timeline)
+    candidate_indexes = sorted(
+        {_int_value(item.get("index")) for item in candidates if _int_value(item.get("index"))}
+    )
+    authoritative_indexes = sorted(
+        {
+            _int_value(item.get("index"))
+            for item in results
+            if item.get("authoritative_observation")
+            and _int_value(item.get("index")) in candidate_indexes
+        }
+    )
+    missing_indexes = sorted(set(candidate_indexes) - set(authoritative_indexes))
+    coverage_complete = not missing_indexes
+    apply_allowed = apply_mode == "merge" or coverage_complete
+    changes: dict[str, list[Any]] = {
+        "updated_indexes": [],
+        "cleared_indexes": [],
+        "preserved_indexes": sorted(
+            {
+                _int_value(item.get("index"))
+                for item in results
+                if not item.get("authoritative_observation") and _int_value(item.get("index"))
+            }
+        ),
+        "changes": [],
+    }
+    if apply_allowed:
+        changes = _apply_ocr_results_to_timeline(timeline, results, apply_mode=apply_mode)
+        write_json(root / "timeline.json", timeline)
 
     source_updated = False
     source_package_text = str(manifest.get("source_package") or "").strip()
     source_package = Path(source_package_text).expanduser() if source_package_text else None
-    if source_package and source_package.exists() and source_package.is_file():
+    if apply_allowed and source_package and source_package.exists() and source_package.is_file():
         package = read_json(source_package)
         if isinstance(package, dict) and isinstance(package.get("timeline"), list):
-            _apply_ocr_results_to_timeline(package["timeline"], results)
+            _apply_ocr_results_to_timeline(package["timeline"], results, apply_mode=apply_mode)
             package["coverage"] = _coverage_audit(package["timeline"])
             package["quality_audit"] = _quality_audit(package["timeline"])
             package["ocr_backfilled_at"] = now_iso()
             write_json(source_package, package)
             source_updated = True
+    receipt_path = root / "ocr-backfill-overwrite-receipt.json" if apply_mode == "replace_snapshot" else None
+    if receipt_path is not None:
+        input_path = Path(input_json).expanduser().resolve() if input_json else None
+        write_json(
+            receipt_path,
+            {
+                "schema": "video_knowledge_pipeline.ocr_overwrite_receipt.v1",
+                "created_at": now_iso(),
+                "status": "applied" if apply_allowed else "rejected_incomplete_snapshot",
+                "mode": apply_mode,
+                "bundle_dir": str(root),
+                "source_input": str(input_path or ""),
+                "source_input_sha256": _sha256_file_if_available(input_path),
+                "coverage": {
+                    "complete": coverage_complete,
+                    "candidate_indexes": candidate_indexes,
+                    "authoritative_indexes": authoritative_indexes,
+                    "missing_indexes": missing_indexes,
+                },
+                "updated_indexes": changes["updated_indexes"],
+                "cleared_indexes": changes["cleared_indexes"],
+                "preserved_indexes": changes["preserved_indexes"],
+                "changes": changes["changes"],
+                "scope": "timeline visual_text and OCR backfill fields for image-backed candidates only",
+                "rollback": {
+                    "source": "changes[].before_text",
+                    "command": "Review changes[].before_text and restore only accepted values; no automatic rollback is performed.",
+                },
+            },
+        )
     return {
-        "updated": len(updated_indexes),
-        "updated_indexes": updated_indexes,
+        "updated": len(changes["updated_indexes"]),
+        "updated_indexes": changes["updated_indexes"],
+        "cleared": len(changes["cleared_indexes"]),
+        "cleared_indexes": changes["cleared_indexes"],
+        "preserved_indexes": changes["preserved_indexes"],
+        "coverage_complete": coverage_complete,
+        "missing_indexes": missing_indexes,
+        "applied": apply_allowed,
+        "overwrite_receipt_path": str(receipt_path or ""),
         "source_package_updated": source_updated,
     }
 
 
-def _apply_ocr_results_to_timeline(timeline: list[dict[str, Any]], results: list[dict[str, Any]]) -> list[int]:
-    updated = []
+def _apply_ocr_results_to_timeline(
+    timeline: list[dict[str, Any]],
+    results: list[dict[str, Any]],
+    *,
+    apply_mode: str,
+) -> dict[str, list[Any]]:
+    updated: list[int] = []
+    cleared: list[int] = []
+    preserved: list[int] = []
+    changes: list[dict[str, Any]] = []
     for result in results:
         text = str(result.get("text") or "").strip()
         index = _int_value(result.get("index"))
-        if not (result.get("ok") and text and 1 <= index <= len(timeline)):
+        if not (1 <= index <= len(timeline)):
             continue
         item = timeline[index - 1]
         current = str(item.get("visual_text") or "").strip()
+        authoritative = bool(result.get("authoritative_observation"))
+        if apply_mode == "replace_snapshot" and authoritative and not text:
+            if current:
+                item.setdefault("original_visual_text", current)
+            item["ocr_snapshot_previous_visual_text"] = current
+            item.pop("visual_text", None)
+            item.pop("ocr_backfilled_text", None)
+            item.pop("ocr_backfilled_at", None)
+            item["ocr_snapshot_cleared_at"] = now_iso()
+            item["quality_issues"] = _dedupe([*_quality_issues(item), "missing_visual_text"])
+            cleared.append(index)
+            changes.append(
+                {
+                    "index": index,
+                    "action": "cleared",
+                    "before_sha256": _text_sha256(current),
+                    "after_sha256": _text_sha256(""),
+                    "before_text": current,
+                    "after_text": "",
+                }
+            )
+            continue
+        if not (result.get("ok") and text):
+            preserved.append(index)
+            continue
         if current and current != text:
             item.setdefault("original_visual_text", current)
+        if apply_mode == "replace_snapshot":
+            item["ocr_snapshot_previous_visual_text"] = current
         item["visual_text"] = text
         item["ocr_backfilled_text"] = text
         item["ocr_backfilled_at"] = now_iso()
         item["quality_issues"] = [issue for issue in _quality_issues(item) if issue not in OCR_GAP_ISSUES]
         updated.append(index)
-    return updated
+        changes.append(
+            {
+                "index": index,
+                "action": "updated",
+                "before_sha256": _text_sha256(current),
+                "after_sha256": _text_sha256(text),
+                "before_text": current,
+                "after_text": text,
+            }
+        )
+    return {
+        "updated_indexes": sorted(set(updated)),
+        "cleared_indexes": sorted(set(cleared)),
+        "preserved_indexes": sorted(set(preserved)),
+        "changes": changes,
+    }
 
 
 def _quality_issues(item: dict[str, Any]) -> list[str]:
@@ -736,13 +923,16 @@ def _render_ocr_backfill_report(
         f"- OK: `{summary.get('ok', False)}`",
         f"- Bundle: `{root}`",
         f"- Execute: `{summary.get('execute')}`",
+        f"- Apply mode: `{summary.get('apply_mode', 'merge')}`",
         f"- Input JSON: `{summary.get('input_json') or ''}`",
         f"- Input template JSON: `{template_path}`",
+        f"- Overwrite receipt: `{summary.get('overwrite_receipt_path') or ''}`",
         f"- Runner: `{runner.get('name')}` available=`{runner.get('available')}`",
         f"- Total: {summary.get('total', 0)}",
         f"- Succeeded: {summary.get('succeeded', 0)}",
         f"- Failed: {summary.get('failed', 0)}",
         f"- Planned: {summary.get('planned', 0)}",
+        f"- Cleared: {summary.get('cleared', 0)}",
         f"- CaptiOCR capability: `{captiocr.get('status', '')}` / available=`{captiocr.get('available', False)}`",
         f"- Tesseract capability: `{tesseract.get('status', '')}` / runtime=`{tesseract.get('runtime_available', False)}` / language_ready=`{tesseract.get('language_ready', False)}`",
         f"- Requested languages: `{', '.join(tesseract.get('requested_languages') or [])}`",
@@ -847,12 +1037,13 @@ def _build_ocr_backfill_handoff(
             "handoff_json": str(handoff_json_path),
             "report_markdown": str(report_path),
             "input_template_json": str(template_path),
+            "overwrite_receipt_json": str(summary.get("overwrite_receipt_path") or ""),
             "manifest_json": str(root / "manifest.json"),
             "timeline_json": str(root / "timeline.json"),
         },
         "captiocr": {
             **captiocr,
-            "runner_available": bool(runner.get("available")),
+            "runner_available": bool(runner.get("available")) and runner.get("name") == "captiocr",
             "runner_error": str(runner.get("error") or ""),
         },
         "capabilities": capabilities,
@@ -1045,7 +1236,7 @@ def _ocr_capabilities(
     *,
     language: str,
 ) -> dict[str, Any]:
-    runner_available = bool(runner.get("available"))
+    runner_available = bool(runner.get("available")) and runner.get("name") == "captiocr"
     checkout_available = bool(captiocr.get("available"))
     captiocr_status = "ready" if runner_available else "checkout_only" if checkout_available else "unavailable"
     return {
@@ -1130,6 +1321,25 @@ def _dedupe(values: list[str]) -> list[str]:
         seen.add(value)
         result.append(value)
     return result
+
+
+def _requested_languages(language: str) -> list[str]:
+    normalized = str(language or "").replace(",", "+")
+    return _dedupe([part.strip() for part in normalized.split("+") if part.strip()])
+
+
+def _text_sha256(value: str) -> str:
+    return hashlib.sha256(str(value or "").encode("utf-8")).hexdigest()
+
+
+def _sha256_file_if_available(path: Path | None) -> str:
+    if path is None or not path.is_file():
+        return ""
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _int_value(value: Any) -> int:
