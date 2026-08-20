@@ -71,6 +71,7 @@ def resolve_provider_config(provider_config: dict[str, Any] | None = None) -> di
             )
             or profile["model"]
         ),
+        "max_tokens": _positive_int_or_none(cfg.get("max_tokens")),
         "timeout_seconds": int(cfg.get("timeout_seconds") or os.environ.get("LECTURE_VISION_TIMEOUT_SECONDS") or 60),
         "adapter_backend": str(cfg.get("adapter_backend") or ""),
         "api_key_optional": bool(cfg.get("api_key_optional")),
@@ -97,13 +98,21 @@ def call_vision_model(
     provider_config: dict[str, Any],
     prompt: str,
     image_paths: list[str],
+    max_tokens: int | None = None,
 ) -> dict[str, Any]:
     provider = _provider_name(str(provider_config.get("provider") or "openai_compatible"))
     if provider == "fixture":
-        return call_fixture_vision(provider_config=provider_config, prompt=prompt, image_paths=image_paths)
+        result = call_fixture_vision(provider_config=provider_config, prompt=prompt, image_paths=image_paths)
+        return _with_completion_metadata(result, max_tokens=max_tokens, finish_reason="stop")
     if provider == "gemini":
-        return call_gemini_vision(provider_config=provider_config, prompt=prompt, image_paths=image_paths)
-    return call_openai_compatible_vision(provider_config=provider_config, prompt=prompt, image_paths=image_paths)
+        result = call_gemini_vision(provider_config=provider_config, prompt=prompt, image_paths=image_paths)
+        return _with_completion_metadata(result, max_tokens=max_tokens, finish_reason=str(result.get("finish_reason") or ""))
+    return call_openai_compatible_vision(
+        provider_config=provider_config,
+        prompt=prompt,
+        image_paths=image_paths,
+        max_tokens=max_tokens,
+    )
 
 
 def test_vision_provider(
@@ -138,9 +147,14 @@ def call_openai_compatible_vision(
     provider_config: dict[str, Any],
     prompt: str,
     image_paths: list[str],
+    max_tokens: int | None = None,
 ) -> dict[str, Any]:
     if provider_requires_api_key(provider_config) and not provider_config.get("api_key"):
-        return {"ok": False, "error": "missing_api_key", "content": ""}
+        return _with_completion_metadata(
+            {"ok": False, "error": "missing_api_key", "content": ""},
+            max_tokens=max_tokens,
+            finish_reason="",
+        )
     content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
     for path in image_paths:
         data_url = _image_data_url(path)
@@ -151,6 +165,8 @@ def call_openai_compatible_vision(
         "messages": [{"role": "user", "content": content}],
         "temperature": 0,
     }
+    if max_tokens is not None and int(max_tokens) > 0:
+        body["max_tokens"] = int(max_tokens)
     headers = {
         "Content-Type": "application/json",
     }
@@ -166,7 +182,11 @@ def call_openai_compatible_vision(
         with urllib.request.urlopen(request, timeout=int(provider_config.get("timeout_seconds") or 60)) as response:
             payload = json.loads(response.read().decode("utf-8"))
     except Exception as exc:  # pragma: no cover - network is optional and normally disabled in tests.
-        return {"ok": False, "error": str(exc), "content": ""}
+        return _with_completion_metadata(
+            {"ok": False, "error": str(exc), "content": ""},
+            max_tokens=max_tokens,
+            finish_reason="",
+        )
     content_text = ""
     finish_reason = ""
     reasoning_chars = 0
@@ -184,8 +204,16 @@ def call_openai_compatible_vision(
         detail = f"empty_content; finish_reason={finish_reason or 'unknown'}"
         if reasoning_chars:
             detail = f"empty_content_reasoning_only; finish_reason={finish_reason or 'unknown'}; reasoning_chars={reasoning_chars}"
-        return {"ok": False, "error": detail, "content": "", "raw_response": payload}
-    return {"ok": True, "error": "", "content": content_text, "raw_response": payload}
+        return _with_completion_metadata(
+            {"ok": False, "error": detail, "content": "", "raw_response": payload},
+            max_tokens=max_tokens,
+            finish_reason=finish_reason,
+        )
+    return _with_completion_metadata(
+        {"ok": True, "error": "", "content": content_text, "raw_response": payload},
+        max_tokens=max_tokens,
+        finish_reason=finish_reason,
+    )
 
 
 def call_fixture_vision(
@@ -378,16 +406,35 @@ def _vision_check(cfg: dict[str, Any], name: str, prompt: str, image_paths: list
             "image_count": len(image_paths),
             "image_payload": image_payload,
         }
-    response = call_vision_model(provider_config=cfg, prompt=prompt, image_paths=image_paths)
+    configured_max_tokens = _positive_int_or_none(cfg.get("max_tokens"))
+    if configured_max_tokens is None:
+        response = call_vision_model(provider_config=cfg, prompt=prompt, image_paths=image_paths)
+    else:
+        response = call_vision_model(
+            provider_config=cfg,
+            prompt=prompt,
+            image_paths=image_paths,
+            max_tokens=configured_max_tokens,
+        )
     parsed = parse_model_json(str(response.get("content") or ""))
-    status = _check_status(response=response, parsed=parsed)
-    error = str(response.get("error") or ("model_output_parse_failed" if parsed.get("_parse_failed") else ""))
+    truncated = bool(response.get("truncated"))
+    status = "truncated" if truncated else _check_status(response=response, parsed=parsed)
+    error = str(
+        response.get("error")
+        or ("model_output_truncated" if truncated else "model_output_parse_failed" if parsed.get("_parse_failed") else "")
+    )
+    complete = bool(response.get("ok")) and not parsed.get("_parse_failed") and not truncated
     return {
         "name": name,
-        "ok": bool(response.get("ok")) and not parsed.get("_parse_failed"),
+        "ok": complete,
         "status": status,
         "error": error,
-        "error_class": _classify_provider_error(error, status=status),
+        "error_class": "model_output_truncated" if truncated else _classify_provider_error(error, status=status),
+        "request_max_tokens": response.get("request_max_tokens"),
+        "request_max_tokens_omitted": bool(response.get("request_max_tokens_omitted", True)),
+        "finish_reason": str(response.get("finish_reason") or ""),
+        "truncated": truncated,
+        "complete": complete,
         "image_count": len(image_paths),
         "image_payload": image_payload,
         "parsed_preview": {key: parsed.get(key) for key in list(parsed)[:6] if key != "raw_content"},
@@ -399,6 +446,7 @@ def _public_provider_config(cfg: dict[str, Any]) -> dict[str, Any]:
         "provider": cfg.get("provider"),
         "base_url": redact_url_secrets(str(cfg.get("base_url") or "")),
         "model": cfg.get("model"),
+        "max_tokens": cfg.get("max_tokens"),
         "api_key_required": provider_requires_api_key(cfg),
         "api_key_configured": bool(cfg.get("api_key")),
         "timeout_seconds": cfg.get("timeout_seconds"),
@@ -592,6 +640,36 @@ def _classify_provider_error(error: str, *, status: str = "") -> str:
     if "image not supported" in lowered or "does not support image" in lowered or "doesn't support image" in lowered or "unsupported image" in lowered or "invalid image_url" in lowered:
         return "provider_image_not_supported"
     return status or "provider_failed"
+
+
+def _with_completion_metadata(
+    result: dict[str, Any],
+    *,
+    max_tokens: int | None,
+    finish_reason: str,
+) -> dict[str, Any]:
+    request_max_tokens = _positive_int_or_none(max_tokens)
+    normalised_finish = str(finish_reason or "").strip().lower()
+    truncated = normalised_finish in {"length", "max_tokens", "max_token", "token_limit"}
+    value = dict(result)
+    value.update(
+        {
+            "request_max_tokens": request_max_tokens,
+            "request_max_tokens_omitted": request_max_tokens is None,
+            "finish_reason": str(finish_reason or ""),
+            "truncated": truncated,
+            "complete": bool(value.get("ok")) and not truncated,
+        }
+    )
+    return value
+
+
+def _positive_int_or_none(value: Any) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
 
 
 def _provider_request_url(cfg: dict[str, Any]) -> str:

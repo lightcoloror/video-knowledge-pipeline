@@ -1,0 +1,134 @@
+{
+  "schema": "video_knowledge_pipeline.implementation_completion.v1",
+  "dispatch_id": "DZ-FITNESS-VKP-FEEDBACK-20260820-01",
+  "goal_status": "complete",
+  "codex_acceptance_status": "accepted",
+  "generated_at": "2026-08-20T13:01:21+08:00",
+  "acting_agent": "Codex owner, direct implementation after explicit user workflow override",
+  "base_commit": "26c6f432946facaf1f6701d729a329669641b797",
+  "implementation_parent_commit": "26c6f432946facaf1f6701d729a329669641b797",
+  "implementation_commit": "this_selective_commit_hash_is_returned_out_of_band",
+  "authority": {
+    "source_feedback": {
+      "path": "C:\\Users\\lightcolor\\WorkBuddy\\2026-08-19-14-30-47\\dz-fitness\\本地工具反馈文档.md",
+      "sha256": "657caad19c0e586ccc3e0625075833c8d9f3f418f2a172f4fae400417c36b515"
+    },
+    "owner_triage": {
+      "path": "C:\\Users\\lightcolor\\Documents\\Codex\\2026-08-18\\vkp-continuation-3\\outputs\\QUOTA-RECOVERY-VKP-20260820-01-owner-triage.md",
+      "sha256": "0164c46bb30c6c22afc7024cd9da3b618d94d93083072ec8ab19ca665b81867a"
+    }
+  },
+  "change_records": [
+    {
+      "intent": "Always leave a structured local-video outcome when media tools are unavailable or ASR planning/execution fails.",
+      "decision": "Reuse local_runtime_preflight and wrap existing ASR stages with stage_results, failed_stages and recovery_commands; keep provenance and partial artifacts.",
+      "reason": "The prior command could stop after provenance or raise from plan_asr without a final operator-readable failure state.",
+      "evidence": "tests/test_local_video_run_failure_receipt.py; managed focused and 140-test associated regressions passed.",
+      "effective_scope": "prepare-local-video-run JSON/Markdown reporting and retry hints only; no media processing behavior or checkpoint owner was replaced.",
+      "rollback": "Revert local_video_run.py and the related CLI/preflight additions; existing run folders require no migration."
+    },
+    {
+      "intent": "Expose CaptiOCR, Tesseract and requested-language readiness instead of silent OCR failure.",
+      "decision": "Extend the existing resolver with installed/requested/missing language packs and propagate capability/status/recovery fields through OCR reports and handoffs.",
+      "reason": "An executable plus tessdata directory is not sufficient when the requested traineddata files are absent.",
+      "evidence": "tests/test_ocr_backend_capability.py; managed focused and associated regressions passed.",
+      "effective_scope": "OCR preflight, execution refusal on missing language packs, report/handoff metadata; no package installation or real OCR run.",
+      "rollback": "Revert captiocr_resolver.py and ocr_backfill.py; previously generated OCR artifacts remain readable because fields are additive."
+    },
+    {
+      "intent": "Make local VLM fallback one-frame-per-request with explicit token and truncation semantics.",
+      "decision": "Pass max_tokens through CLI, task gateway and vision providers, persist finish_reason/truncated/complete, apply only complete per-frame results, and treat multi-image checks as diagnostic.",
+      "reason": "A length-truncated response must not be aggregated or reported as complete, and local fallback must avoid ambiguous multi-image truncation.",
+      "evidence": "tests/test_local_vlm_single_frame_contract.py; managed post-review VLM/gateway regression codex-test-56096-5b640bb2c2d042e2ab90b7aec8e3f730 passed 90 tests.",
+      "effective_scope": "Local/compatible vision request metadata, semantic-frame aggregation and local VLM smoke reporting; no provider was contacted.",
+      "rollback": "Revert vision_api.py, online_model_gateway.py, multimodal_frame_analyzer.py, local_vlm_server_adapter.py and their CLI parameters; stored additive metadata may be ignored."
+    },
+    {
+      "intent": "Provide a lightweight Windows/Python/media dependency preflight without machine-specific configuration.",
+      "decision": "Add local-runtime-preflight using sys, pyvenv.cfg, pyproject imports and the existing media_tools resolvers; emit commands as operator instructions only.",
+      "reason": "Interpreter, uv venv, ffmpeg/ffprobe and dependency mismatches should be visible before a local run.",
+      "evidence": "tests/test_local_runtime_preflight.py; AST, Ruff and managed regressions passed.",
+      "effective_scope": "Read-only diagnostic command and local-tool inventory augmentation; no hard-coded active machine path, install, service start or persistent configuration write.",
+      "rollback": "Revert local_tool_inventory.py and the local-runtime-preflight CLI branch."
+    },
+    {
+      "intent": "Allow LM Studio port 1234 only as an explicit local provider candidate.",
+      "decision": "Accept operator-supplied loopback HTTP URLs with an explicit port, reject non-loopback overrides before any call, and retain 1234 only in a plan-only command example.",
+      "reason": "Provider discovery must not read or overwrite unowned configuration or silently make a real request.",
+      "evidence": "Synthetic loopback/non-loopback and provider-request boundary tests passed.",
+      "effective_scope": "local-vlm-serving-smoke arguments and reports; no LM Studio process, model, account, secret or endpoint was accessed.",
+      "rollback": "Revert local_vlm_server_adapter.py and its CLI arguments."
+    }
+  ],
+  "changed_paths": [
+    "docs/receipts/DZ-FITNESS-VKP-FEEDBACK-20260820-01.completion-receipt.json",
+    "src/video_knowledge_pipeline/captiocr_resolver.py",
+    "src/video_knowledge_pipeline/cli.py",
+    "src/video_knowledge_pipeline/local_tool_inventory.py",
+    "src/video_knowledge_pipeline/local_video_run.py",
+    "src/video_knowledge_pipeline/local_vlm_server_adapter.py",
+    "src/video_knowledge_pipeline/multimodal_frame_analyzer.py",
+    "src/video_knowledge_pipeline/ocr_backfill.py",
+    "src/video_knowledge_pipeline/online_model_gateway.py",
+    "src/video_knowledge_pipeline/vision_api.py",
+    "tests/test_local_runtime_preflight.py",
+    "tests/test_local_video_run_failure_receipt.py",
+    "tests/test_local_vlm_single_frame_contract.py",
+    "tests/test_ocr_backend_capability.py"
+  ],
+  "verification": {
+    "red": {
+      "run_id": "codex-test-52652-73f12b1e6da74f879283120a48478768",
+      "result": "12 failed as expected before implementation"
+    },
+    "focused_green": {
+      "run_id": "codex-test-3480-b69e8d978009429e810d1569c8e5db0f",
+      "result": "12 passed"
+    },
+    "associated": {
+      "run_id": "codex-test-55584-0a68191ba015439a85ce5380d14afbf2",
+      "result": "140 passed"
+    },
+    "post_review_vlm_gateway": {
+      "run_id": "codex-test-56096-5b640bb2c2d042e2ab90b7aec8e3f730",
+      "result": "90 passed"
+    },
+    "ruff": "passed for all 13 task Python files",
+    "python_ast": "13 task Python files parsed",
+    "git_diff_check": "passed for tracked task changes",
+    "json_validation": "passed before selective commit",
+    "sensitive_diff_scan": "passed before selective commit"
+  },
+  "warnings": [
+    "The global Python test host lacked rapidfuzz; managed regressions used a process-local PYTHONPATH to the existing project .venv without installing or changing persistent configuration.",
+    "Managed pytest emitted existing third-party requests/jieba warnings and an existing unknown cache_dir warning; no task test failed.",
+    "During final boundary verification, seven pre-existing untracked root OCR/debug scripts present at task start were no longer present. Codex issued no delete/move command and did not reconstruct unknown untracked content; all remaining pre-existing tracked dirty files and untracked docs/test wrapper retained their frozen hashes."
+  ],
+  "blockers": [],
+  "remaining_real_runtime_gates": [
+    "Run local-runtime-preflight under the intended Windows uv venv and configure ffmpeg/ffprobe paths if reported missing.",
+    "Provide reviewed CaptiOCR/Tesseract binaries and the requested traineddata language packs before real OCR execution.",
+    "Start and configure a loopback VLM provider explicitly, select a loaded model/token limit, then approve a synthetic or public-small-sample smoke before any real media run.",
+    "Real local video/OCR/VLM execution remains operator-gated and was not accepted by this synthetic-only dispatch."
+  ],
+  "cross_owner_items": [
+    "Downloader, MediaGo, browser Cookie/sniffing and source acquisition remain outside VKP ownership.",
+    "WorkBuddy initialization and background PID lifecycle remain outside this dispatch.",
+    "Qwen recoverable-window commit 26c6f43 remains implemented_not_accepted and was not overwritten or independently accepted here."
+  ],
+  "privacy_and_execution_boundary": {
+    "synthetic_fixtures_only": true,
+    "real_media_used": false,
+    "model_inference_or_download": false,
+    "provider_called": false,
+    "lm_studio_started": false,
+    "external_service_started": false,
+    "network_used": false,
+    "dependencies_installed": false,
+    "configuration_changed": false,
+    "account_or_secret_accessed": false,
+    "push_performed": false
+  },
+  "rollback": "Revert the single selective implementation commit returned with this receipt. All schemas are additive and no real media, provider state, configuration or checkpoint migration occurred.",
+  "review_required": false
+}

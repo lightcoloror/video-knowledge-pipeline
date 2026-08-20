@@ -9,8 +9,10 @@ from .asr_execution import run_asr_plan
 from .asr_runner import plan_asr_run
 from .entity_lexicon import build_entity_lexicon
 from .lecture_package import build_lecture_package
+from .local_tool_inventory import local_runtime_preflight
 from .models import now_iso
 from .orchestrator import add_video, init_project
+from .powershell import quote_powershell_literal
 from .storage import read_json, write_json
 from .video_source import prepare_video_source
 from .webui_bridge import export_webui_bundle
@@ -42,21 +44,100 @@ def prepare_local_video_run(
     source_dir = root / "source"
     source = prepare_video_source(str(media), source_dir, execute=copy_media)
     selected_media = Path(str(source.get("local_media_path") or media))
-    asr_env = asr_environment_status()
+    runtime_preflight = local_runtime_preflight()
+    stage_results: list[dict[str, Any]] = [
+        {"stage": "source", "status": "ok", "error_type": "", "error": ""}
+    ]
+    failed_stages: list[str] = []
+    recovery_commands = [
+        dict(row)
+        for row in runtime_preflight.get("recovery_commands") or []
+        if isinstance(row, dict)
+    ]
+    media_capabilities = (
+        runtime_preflight.get("capabilities", {}).get("media", {})
+        if isinstance(runtime_preflight.get("capabilities"), dict)
+        else {}
+    )
+    missing_media = [
+        name
+        for name in ("ffmpeg", "ffprobe")
+        if not isinstance(media_capabilities.get(name), dict)
+        or not media_capabilities.get(name, {}).get("available")
+    ]
+    if missing_media:
+        failed_stages.append("media_preflight")
+        stage_results.append(
+            {
+                "stage": "media_preflight",
+                "status": "failed",
+                "error_type": "missing_media_tools",
+                "error": "Missing local media tools: " + ", ".join(missing_media),
+            }
+        )
+    else:
+        stage_results.append(
+            {"stage": "media_preflight", "status": "ok", "error_type": "", "error": ""}
+        )
+    try:
+        asr_env = asr_environment_status()
+        stage_results.append(
+            {"stage": "asr_environment", "status": "ok", "error_type": "", "error": ""}
+        )
+    except Exception as exc:  # pragma: no cover - defensive environment boundary.
+        asr_env = {"ok": False, "error": str(exc)}
+        _record_stage_failure(stage_results, failed_stages, "asr_environment", exc)
     asr_plan: dict[str, Any] | None = None
     asr_run: dict[str, Any] | None = None
     pre_asr_context: dict[str, Any] | None = None
     if plan_asr:
-        pre_asr_context = _prepare_pre_asr_context(root, title=title or media.stem)
-        asr_plan = plan_asr_run(
-            root,
-            selected_media,
-            preset=asr_preset,
-            model=asr_model,
-            hotword=str(pre_asr_context.get("hotword_text") or ""),
-        )
-        if execute_asr:
-            asr_run = run_asr_plan(asr_plan["plan_path"], execute=True, timeout_seconds=timeout_seconds)
+        try:
+            pre_asr_context = _prepare_pre_asr_context(root, title=title or media.stem)
+            stage_results.append(
+                {"stage": "pre_asr_context", "status": "ok", "error_type": "", "error": ""}
+            )
+        except Exception as exc:
+            _record_stage_failure(stage_results, failed_stages, "pre_asr_context", exc)
+        if pre_asr_context is not None:
+            try:
+                asr_plan = plan_asr_run(
+                    root,
+                    selected_media,
+                    preset=asr_preset,
+                    model=asr_model,
+                    hotword=str(pre_asr_context.get("hotword_text") or ""),
+                )
+                stage_results.append(
+                    {"stage": "asr_plan", "status": "ok", "error_type": "", "error": ""}
+                )
+            except Exception as exc:
+                _record_stage_failure(stage_results, failed_stages, "asr_plan", exc)
+                recovery_commands.append(
+                    {
+                        "stage": "asr_plan",
+                        "key": "retry_prepare_local_video_run",
+                        "command": _prepare_retry_command(media, root),
+                        "reason": "Fix the reported ASR planning/runtime blocker, then rerun the same local preparation command.",
+                    }
+                )
+        if execute_asr and asr_plan:
+            try:
+                asr_run = run_asr_plan(asr_plan["plan_path"], execute=True, timeout_seconds=timeout_seconds)
+                stage_results.append(
+                    {"stage": "asr_execute", "status": str(asr_run.get("status") or "ok"), "error_type": "", "error": str(asr_run.get("error") or "")}
+                )
+                if str(asr_run.get("status") or "ok") not in {"ok", "completed"}:
+                    failed_stages.append("asr_execute")
+            except Exception as exc:
+                _record_stage_failure(stage_results, failed_stages, "asr_execute", exc)
+                recovery_commands.append(
+                    {
+                        "stage": "asr_execute",
+                        "key": "retry_asr_plan",
+                        "command": f".\\scripts\\video-knowledge.ps1 run-asr-plan {quote_powershell_literal(str(asr_plan.get('plan_path') or ''))} --execute",
+                        "reason": "Retry the existing ASR plan after resolving the reported runtime blocker.",
+                    }
+                )
     transcript = _selected_transcript(transcript_path=transcript_path, asr_run=asr_run)
     initial_bundle: dict[str, Any] | None = None
     if build_initial_bundle:
@@ -71,9 +152,42 @@ def prepare_local_video_run(
             detect_scenes=detect_scenes,
             extract_frames=extract_frames,
         )
+        bundle_status = str(initial_bundle.get("status") or "")
+        if bundle_status == "ok":
+            stage_results.append(
+                {"stage": "initial_bundle", "status": "ok", "error_type": "", "error": ""}
+            )
+        else:
+            failed_stages.append("initial_bundle")
+            stage_results.append(
+                {
+                    "stage": "initial_bundle",
+                    "status": "failed",
+                    "error_type": "initial_bundle_failed",
+                    "error": str(initial_bundle.get("error") or "initial bundle failed"),
+                }
+            )
+            recovery_commands.append(
+                {
+                    "stage": "initial_bundle",
+                    "key": "retry_initial_bundle",
+                    "command": _prepare_retry_command(media, root, build_initial_bundle=True),
+                    "reason": "Fix media/runtime blockers, then rebuild the initial bundle.",
+                }
+            )
+    failed_stages = list(dict.fromkeys(failed_stages))
+    recovery_commands = _dedupe_recovery_commands(recovery_commands)
+    ok = not failed_stages
     report = {
         "schema": "video_knowledge_local_video_run.v1",
         "created_at": now_iso(),
+        "ok": ok,
+        "status": "ok" if ok else "partial_failure",
+        "failed_stage": failed_stages[0] if failed_stages else "",
+        "failed_stages": failed_stages,
+        "stage_results": stage_results,
+        "runtime_preflight": runtime_preflight,
+        "recovery_commands": recovery_commands,
         "title": title or media.stem,
         "workspace_dir": str(root),
         "media_path": str(media),
@@ -132,6 +246,9 @@ def render_local_video_run_markdown(report: dict[str, Any]) -> str:
     lines = [
         "# Video Knowledge Run",
         "",
+        f"- Status: `{report.get('status', '')}`",
+        f"- OK: `{report.get('ok', False)}`",
+        f"- Failed stage: `{report.get('failed_stage', '')}`",
         f"- Title: {report.get('title', '')}",
         f"- Workspace: `{report.get('workspace_dir', '')}`",
         f"- Media: `{report.get('selected_media_path', '')}`",
@@ -147,6 +264,13 @@ def render_local_video_run_markdown(report: dict[str, Any]) -> str:
         f"- Execute status: `{asr_run.get('status', 'not_run')}`",
         f"- Selected transcript: `{report.get('transcript_path', '')}`",
     ]
+    failures = [row for row in report.get("stage_results") or [] if isinstance(row, dict) and row.get("status") == "failed"]
+    if failures:
+        lines.extend(["", "## Failures", ""])
+        for failure in failures:
+            lines.append(
+                f"- `{failure.get('stage', '')}` / `{failure.get('error_type', '')}`: {failure.get('error', '')}"
+            )
     if asr_plan.get("powershell"):
         lines.extend(["", "### ASR Command", "", "```powershell", str(asr_plan.get("powershell")), "```"])
     normalized = asr_run.get("normalized") if isinstance(asr_run.get("normalized"), dict) else {}
@@ -179,7 +303,52 @@ def render_local_video_run_markdown(report: dict[str, Any]) -> str:
             lines.append(f"- [{step.get('status', 'todo')}] `{step.get('key', '')}`: {step.get('label', '')}")
             if step.get("command"):
                 lines.append(f"  - `{step.get('command')}`")
+    recovery_commands = [row for row in report.get("recovery_commands") or [] if isinstance(row, dict)]
+    if recovery_commands:
+        lines.extend(["", "## Recovery Commands", ""])
+        for row in recovery_commands:
+            lines.append(f"- `{row.get('stage') or row.get('key', '')}`: `{row.get('command', '')}`")
+            if row.get("reason"):
+                lines.append(f"  - {row.get('reason')}")
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _record_stage_failure(
+    stage_results: list[dict[str, Any]],
+    failed_stages: list[str],
+    stage: str,
+    error: Exception,
+) -> None:
+    failed_stages.append(stage)
+    stage_results.append(
+        {
+            "stage": stage,
+            "status": "failed",
+            "error_type": type(error).__name__,
+            "error": str(error),
+        }
+    )
+
+
+def _prepare_retry_command(media: Path, root: Path, *, build_initial_bundle: bool = False) -> str:
+    command = (
+        ".\\scripts\\video-knowledge.ps1 prepare-local-video-run "
+        f"{quote_powershell_literal(str(media))} {quote_powershell_literal(str(root))}"
+    )
+    return f"{command} --build-initial-bundle" if build_initial_bundle else command
+
+
+def _dedupe_recovery_commands(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[tuple[str, str]] = set()
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        command = str(row.get("command") or "")
+        key = (str(row.get("stage") or row.get("key") or ""), command)
+        if not command or key in seen:
+            continue
+        seen.add(key)
+        result.append(dict(row))
+    return result
 
 
 def _compact_asr_env(status: dict[str, Any]) -> dict[str, Any]:

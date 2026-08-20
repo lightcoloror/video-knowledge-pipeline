@@ -87,6 +87,7 @@ from .knowledge_note_export import export_knowledge_note
 from .lecture_pipeline import run_ready_lecture_pipeline
 from .lecture_workflow import refresh_lecture_review_outputs
 from .local_video_run import prepare_local_video_run
+from .local_tool_inventory import local_runtime_preflight
 from .local_production_preset import install_local_production_preset
 from .local_media_progress import stderr_progress_callback
 from .local_asr_service_adapter import plan_local_asr_service_run, run_local_asr_service_plan
@@ -731,6 +732,8 @@ def main(argv: list[str] | None = None) -> int:
         result = prepare_video_source(args.video_or_url, args.workspace_dir, execute=args.execute)
     elif args.command == "import-page-metadata":
         result = import_page_metadata(args.bundle_dir, args.metadata_json, write=not args.no_write)
+    elif args.command == "local-runtime-preflight":
+        result = local_runtime_preflight(args.project_root or None)
     elif args.command == "prepare-local-video-run":
         result = prepare_local_video_run(
             args.media_path,
@@ -1328,6 +1331,7 @@ def main(argv: list[str] | None = None) -> int:
             vision_retry_delay_seconds=args.vision_retry_delay_seconds,
             execution_actor=args.execution_actor,
             export_consent=args.export_consent or None,
+            max_tokens=args.max_tokens or None,
         )
     elif args.command == "run-temporal-frame-groups":
         result = run_temporal_frame_groups(
@@ -2074,6 +2078,9 @@ def main(argv: list[str] | None = None) -> int:
             image_probe_max_edge=args.image_probe_max_edge,
             image_probe_jpeg_quality=args.image_probe_jpeg_quality,
             frame_group_count=args.frame_group_count,
+            base_url=args.base_url,
+            model=args.model,
+            max_tokens=args.max_tokens or None,
             write=not args.no_write,
         )
     elif args.command == "audit-knowledge-coverage":
@@ -3050,6 +3057,9 @@ def build_parser() -> argparse.ArgumentParser:
     page_metadata.add_argument("bundle_dir")
     page_metadata.add_argument("metadata_json")
     page_metadata.add_argument("--no-write", action="store_true")
+
+    runtime_preflight = sub.add_parser("local-runtime-preflight", help="Inspect Python, uv, media tools, and core dependencies without executing them")
+    runtime_preflight.add_argument("--project-root", default="")
 
     local_run = sub.add_parser("prepare-local-video-run", help="Create a human-readable run folder for one local knowledge video")
     local_run.add_argument("media_path")
@@ -4081,6 +4091,7 @@ def build_parser() -> argparse.ArgumentParser:
     multimodal.add_argument("--vision-retry-delay-seconds", type=float, default=0.0)
     multimodal.add_argument("--execution-actor", choices=["operator", "agent"], default="operator")
     multimodal.add_argument("--export-consent", default="", help="Scoped consent JSON required for agent execution")
+    multimodal.add_argument("--max-tokens", type=int, default=0, help="Optional explicit output-token ceiling; truncation remains incomplete")
 
     groups = sub.add_parser("run-temporal-frame-groups", help="Generate 5-12 ordered frames for temporal visual candidates")
     groups.add_argument("bundle_dir")
@@ -4815,6 +4826,9 @@ def build_parser() -> argparse.ArgumentParser:
     vlm_smoke.add_argument("--image-probe-max-edge", type=int, default=512)
     vlm_smoke.add_argument("--image-probe-jpeg-quality", type=int, default=70)
     vlm_smoke.add_argument("--frame-group-count", type=int, default=8)
+    vlm_smoke.add_argument("--base-url", default="", help="Explicit loopback OpenAI-compatible URL; LM Studio commonly uses http://127.0.0.1:1234/v1")
+    vlm_smoke.add_argument("--model", default="", help="Explicit locally loaded model id; never read from or written to pipeline config")
+    vlm_smoke.add_argument("--max-tokens", type=int, default=0)
     vlm_smoke.add_argument("--no-write", action="store_true")
 
     coverage = sub.add_parser("audit-knowledge-coverage", help="Audit no-loss knowledge-channel coverage")

@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from .path_defaults import tool_source_review_root
+from .media_async_client import _is_loopback_base_url
 from .run_artifact_registry import register_bundle_run
 from .storage import read_json, write_json, write_text_atomic
 
@@ -172,6 +173,9 @@ def local_vlm_serving_smoke(
     image_probe_max_edge: int = 512,
     image_probe_jpeg_quality: int = 70,
     frame_group_count: int = 8,
+    base_url: str = "",
+    model: str = "",
+    max_tokens: int | None = None,
     write: bool = True,
 ) -> dict[str, Any]:
     """Plan or run a local VLM service capability smoke.
@@ -187,12 +191,45 @@ def local_vlm_serving_smoke(
     if normalised in {"internvl", "local_internvl"}:
         normalised = "local_vlm"
     profiles = local_vlm_adapter_plan(write=False).get("implemented_provider_profiles", {})
-    profile = profiles.get(normalised) or profiles.get("local_vlm", {})
+    profile = dict(profiles.get(normalised) or profiles.get("local_vlm", {}))
+    if base_url:
+        profile["base_url"] = str(base_url)
+    if model:
+        profile["model"] = str(model)
+    if max_tokens is not None and int(max_tokens) > 0:
+        profile["max_tokens"] = int(max_tokens)
     out_dir = Path(output_dir or bundle_dir or ".").expanduser().resolve()
     bundle_root = Path(bundle_dir).expanduser().resolve() if bundle_dir else None
     frame_group = _select_short_frame_group(bundle_root, frame_group_count=frame_group_count) if bundle_root else {}
+    operator_boundary = {
+        "default_execute": False,
+        "does_not_start_model_server": True,
+        "does_not_modify_timeline": True,
+        "no_cloud_call": True,
+        "local_server_must_already_be_running": True,
+        "provider_request_made": bool(execute),
+        "reads_or_writes_pipeline_config": False,
+    }
+    if normalised in {"local_qwen_vl", "local_vlm"} and not _is_loopback_base_url(str(profile.get("base_url") or "")):
+        return {
+            "ok": False,
+            "status": "invalid_local_provider_url",
+            "schema": "video_knowledge_pipeline.local_vlm_serving_smoke.v1",
+            "execute": bool(execute),
+            "provider": normalised,
+            "profile": profile,
+            "input_spec": {
+                "base_url": profile.get("base_url", ""),
+                "model": profile.get("model", ""),
+                "max_tokens": profile.get("max_tokens"),
+            },
+            "capability_matrix": [],
+            "operator_boundary": {**operator_boundary, "provider_request_made": False},
+            "error": "local VLM providers require an explicit loopback HTTP URL with a port",
+        }
     result: dict[str, Any] = {
         "ok": True,
+        "status": "plan_only" if not execute else "executing",
         "schema": "video_knowledge_pipeline.local_vlm_serving_smoke.v1",
         "execute": bool(execute),
         "provider": normalised,
@@ -204,6 +241,7 @@ def local_vlm_serving_smoke(
             "provider": normalised,
             "base_url": profile.get("base_url", ""),
             "model": profile.get("model", ""),
+            "max_tokens": profile.get("max_tokens"),
             "max_images": int(max_images or 0),
             "image_probe_max_edge": int(image_probe_max_edge or 0),
             "image_probe_jpeg_quality": int(image_probe_jpeg_quality or 70),
@@ -217,20 +255,15 @@ def local_vlm_serving_smoke(
             "qwen_openai_server": "python -m vllm.entrypoints.openai.api_server --model Qwen/Qwen2.5-VL-3B-Instruct --host 127.0.0.1 --port 8000",
             "vkp_smoke_plan": ".\\scripts\\video-knowledge.ps1 local-vlm-serving-smoke --provider local_qwen_vl --bundle-dir <bundle>",
             "vkp_smoke_execute": ".\\scripts\\video-knowledge.ps1 local-vlm-serving-smoke --provider local_qwen_vl --bundle-dir <bundle> --execute",
+            "lm_studio_plan_only": ".\\scripts\\video-knowledge.ps1 local-vlm-serving-smoke --provider local_vlm --base-url http://127.0.0.1:1234/v1 --model <loaded-model> --max-tokens 1200",
         },
-        "operator_boundary": {
-            "default_execute": False,
-            "does_not_start_model_server": True,
-            "does_not_modify_timeline": True,
-            "no_cloud_call": True,
-            "local_server_must_already_be_running": True,
-        },
+        "operator_boundary": operator_boundary,
     }
     if execute:
         from .vision_provider_smoke import vision_provider_smoke
 
         result["smoke"] = vision_provider_smoke(
-            provider=normalised,
+            provider_config=profile,
             timeout_seconds=timeout_seconds,
             bundle_dir=bundle_dir,
             single_image=single_image,
@@ -242,6 +275,7 @@ def local_vlm_serving_smoke(
             write=write,
         )
         result["ok"] = bool(result["smoke"].get("ok"))
+        result["status"] = "executed_ready" if result["ok"] else "executed_failed"
         result["capability_matrix"] = _local_vlm_capability_matrix(smoke=result["smoke"], frame_group=frame_group, execute=execute)
     if write:
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -266,6 +300,9 @@ def local_vlm_serving_smoke(
                 "image_probe_max_edge": int(image_probe_max_edge or 512),
                 "image_probe_jpeg_quality": int(image_probe_jpeg_quality or 70),
                 "frame_group_count": int(frame_group_count or 8),
+                "base_url": str(profile.get("base_url") or ""),
+                "model": str(profile.get("model") or ""),
+                "max_tokens": profile.get("max_tokens"),
                 "write": True,
             },
         )
@@ -308,6 +345,7 @@ def _render_smoke_markdown(result: dict[str, Any]) -> str:
         "- Boundary: this command never starts Qwen/InternVL servers and never mutates timeline.",
         f"- Base URL: `{input_spec.get('base_url', '')}`",
         f"- Model: `{input_spec.get('model', '')}`",
+        f"- Max tokens: `{input_spec.get('max_tokens', '')}`",
         f"- Max images: `{input_spec.get('max_images', 0)}`",
         f"- Short frame group: `{input_spec.get('short_frame_group_image_count', 0)}` frames",
         "",
@@ -342,20 +380,25 @@ def _local_vlm_capability_matrix(*, smoke: dict[str, Any] | None, frame_group: d
     has_group = len(frame_group.get("frame_paths") or []) >= 2
     if not execute:
         return [
-            {"key": "openai_compatible_endpoint", "status": "planned", "evidence": "provider profile is configured; server is not contacted in preview"},
-            {"key": "text_json", "status": "planned", "evidence": "execute=true will run provider text ping"},
-            {"key": "single_image_json", "status": "planned", "evidence": "execute=true will send one prepared image if available"},
-            {"key": "multi_image_json", "status": "planned", "evidence": "execute=true will send multiple prepared images if available"},
-            {"key": "short_frame_group_json", "status": "planned" if has_group else "missing_sample", "evidence": f"{len(frame_group.get('frame_paths') or [])} frame(s) selected from bundle"},
+            {"key": "openai_compatible_endpoint", "status": "planned", "complete": False, "evidence": "provider profile is configured; server is not contacted in preview"},
+            {"key": "text_json", "status": "planned", "complete": False, "evidence": "execute=true will run provider text ping"},
+            {"key": "single_image_json", "status": "planned", "complete": False, "evidence": "fallback sends one prepared image per request"},
+            {"key": "per_frame_aggregation", "status": "planned", "complete": False, "evidence": "semantic frame results are aggregated without multi-image fallback"},
+            {"key": "multi_image_json", "status": "planned", "complete": False, "evidence": "diagnostic only; truncation never counts as complete fallback"},
+            {"key": "short_frame_group_json", "status": "planned" if has_group else "missing_sample", "complete": False, "evidence": f"{len(frame_group.get('frame_paths') or [])} frame(s) selected from bundle"},
         ]
+    single_complete = _check_complete(checks, "single_image_json")
+    multi_complete = _check_complete(checks, "multi_image_json")
     return [
-        {"key": "openai_compatible_endpoint", "status": "ok" if smoke and smoke.get("status") == "ok" else "check_report", "evidence": str(smoke.get("status", "")) if smoke else "no smoke report"},
-        {"key": "text_json", "status": _check_status(checks, "text_ping"), "evidence": _check_evidence(checks, "text_ping")},
-        {"key": "single_image_json", "status": _check_status(checks, "single_image_json"), "evidence": _check_evidence(checks, "single_image_json")},
-        {"key": "multi_image_json", "status": _check_status(checks, "multi_image_json"), "evidence": _check_evidence(checks, "multi_image_json")},
+        {"key": "openai_compatible_endpoint", "status": "ok" if smoke and smoke.get("status") == "ok" else "check_report", "complete": bool(smoke and smoke.get("status") == "ok"), "evidence": str(smoke.get("status", "")) if smoke else "no smoke report"},
+        {"key": "text_json", "status": _check_status(checks, "text_ping"), "complete": _check_complete(checks, "text_ping"), "evidence": _check_evidence(checks, "text_ping")},
+        {"key": "single_image_json", "status": _check_status(checks, "single_image_json"), "complete": single_complete, "evidence": _check_evidence(checks, "single_image_json")},
+        {"key": "per_frame_aggregation", "status": "ready" if single_complete else "incomplete", "complete": single_complete, "evidence": "single-frame fallback is the canonical local aggregation mode"},
+        {"key": "multi_image_json", "status": _check_status(checks, "multi_image_json"), "complete": multi_complete, "evidence": _check_evidence(checks, "multi_image_json")},
         {
             "key": "short_frame_group_json",
             "status": _check_status(checks, "multi_image_json") if has_group else "missing_sample",
+            "complete": multi_complete if has_group else False,
             "evidence": f"{len(frame_group.get('frame_paths') or [])} ordered frame(s); uses multi_image_json check as short-frame-group proxy",
         },
     ]
@@ -425,7 +468,16 @@ def _check_status(checks: dict[str, dict[str, Any]], key: str) -> str:
     row = checks.get(key)
     if not row:
         return "not_run"
+    if row.get("truncated"):
+        return "truncated"
     return "ok" if row.get("ok") else str(row.get("status") or row.get("error_class") or "failed")
+
+
+def _check_complete(checks: dict[str, dict[str, Any]], key: str) -> bool:
+    row = checks.get(key)
+    if not row:
+        return False
+    return bool(row.get("complete", row.get("ok") and not row.get("truncated")))
 
 
 def _check_evidence(checks: dict[str, dict[str, Any]], key: str) -> str:

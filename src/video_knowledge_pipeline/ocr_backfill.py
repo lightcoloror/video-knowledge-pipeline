@@ -68,6 +68,19 @@ def run_ocr_backfill(
         "source_package_updated": False,
     }
     timeline = _read_timeline(root)
+    tesseract = (
+        dict(runner.get("tesseract"))
+        if isinstance(runner.get("tesseract"), dict)
+        else resolve_tesseract_runtime(required_languages=language)
+    )
+    capabilities = _ocr_capabilities(captiocr, runner, tesseract, language=language)
+    status, ok = _ocr_result_status(
+        results,
+        execute=execute,
+        imported=bool(imported_entries),
+        capabilities=capabilities,
+    )
+    recovery_commands = _ocr_recovery_commands(capabilities)
     summary = {
         "total": len(results),
         "execute": execute,
@@ -79,6 +92,8 @@ def run_ocr_backfill(
         "planned": sum(1 for item in results if not item.get("executed")),
         "updated_at": now_iso(),
         "input_template_json": str(template_path),
+        "status": status,
+        "ok": ok,
     }
     manifest["coverage"] = _coverage_audit(timeline)
     manifest["ocr_backfill"] = {
@@ -87,6 +102,8 @@ def run_ocr_backfill(
         "language": language,
         "captiocr": captiocr,
         "runner": runner,
+        "capabilities": capabilities,
+        "recovery_commands": recovery_commands,
         "items": candidates,
         "last_run": summary,
         "last_backfill": {**backfill, "updated_at": now_iso()},
@@ -97,7 +114,19 @@ def run_ocr_backfill(
     write_json(manifest_path, manifest)
 
     report_path = root / "ocr-backfill-report.md"
-    report_path.write_text(_render_ocr_backfill_report(root, results, summary, runner, template_path, screen_text_recovery), encoding="utf-8")
+    report_path.write_text(
+        _render_ocr_backfill_report(
+            root,
+            results,
+            summary,
+            runner,
+            template_path,
+            screen_text_recovery,
+            capabilities,
+            recovery_commands,
+        ),
+        encoding="utf-8",
+    )
     handoff_path = root / "ocr-backfill-handoff.md"
     handoff_json_path = root / "ocr-backfill-handoff.json"
     handoff = _build_ocr_backfill_handoff(
@@ -112,6 +141,8 @@ def run_ocr_backfill(
         report_path,
         handoff_path,
         handoff_json_path,
+        capabilities,
+        recovery_commands,
     )
     write_json(handoff_json_path, handoff)
     handoff_path.write_text(_render_ocr_backfill_handoff_markdown(handoff), encoding="utf-8")
@@ -119,6 +150,8 @@ def run_ocr_backfill(
     manifest["ocr_backfill"]["handoff_json"] = str(handoff_json_path)
     write_json(manifest_path, manifest)
     return {
+        "ok": ok,
+        "status": status,
         "bundle_dir": str(root),
         "manifest_path": str(manifest_path),
         "report_path": str(report_path),
@@ -128,6 +161,8 @@ def run_ocr_backfill(
         "summary": summary,
         "runner": runner,
         "captiocr": captiocr,
+        "capabilities": capabilities,
+        "recovery_commands": recovery_commands,
         "backfill": backfill,
         "items": results,
         "screen_text_recovery": screen_text_recovery,
@@ -474,9 +509,25 @@ def _run_captiocr_candidates(
     language: str,
     captiocr_root: str | Path | None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    runner, processor, image_cls = _load_captiocr_runner(captiocr_root)
+    runner, processor, image_cls = _load_captiocr_runner(captiocr_root, language=language)
     if not runner.get("available"):
-        tesseract = runner.get("tesseract") if isinstance(runner.get("tesseract"), dict) else resolve_tesseract_runtime()
+        tesseract = (
+            runner.get("tesseract")
+            if isinstance(runner.get("tesseract"), dict)
+            else resolve_tesseract_runtime(required_languages=language)
+        )
+        if not tesseract.get("language_ready"):
+            status = str(tesseract.get("status") or "runtime_unavailable")
+            missing = ",".join(str(item) for item in tesseract.get("missing_languages") or [])
+            detail = f"{status}: {missing}" if missing else status
+            runner = {**runner, "tesseract": tesseract, "error": detail}
+            return runner, [
+                {
+                    **_candidate_result(candidate, executed=True, ok=False),
+                    "stderr": detail,
+                }
+                for candidate in candidates
+            ]
         if tesseract.get("cmd"):
             return _run_tesseract_cli_candidates(candidates, language=language, tesseract=tesseract, previous_error=str(runner.get("error") or ""))
         return runner, [
@@ -546,9 +597,13 @@ def _run_tesseract_cli_candidates(
     return runner, results
 
 
-def _load_captiocr_runner(captiocr_root: str | Path | None) -> tuple[dict[str, Any], Any, Any]:
+def _load_captiocr_runner(
+    captiocr_root: str | Path | None,
+    *,
+    language: str = "eng",
+) -> tuple[dict[str, Any], Any, Any]:
     resolved = resolve_captiocr_root(captiocr_root)
-    tesseract = resolve_tesseract_runtime()
+    tesseract = resolve_tesseract_runtime(required_languages=language)
     roots = [Path(root) for root in captiocr_candidate_roots(captiocr_root)]
     for root in roots:
         if root.exists() and str(root) not in sys.path:
@@ -669,10 +724,16 @@ def _render_ocr_backfill_report(
     runner: dict[str, Any],
     template_path: Path,
     screen_text_recovery: dict[str, Any],
+    capabilities: dict[str, Any],
+    recovery_commands: list[dict[str, Any]],
 ) -> str:
+    tesseract = capabilities.get("tesseract") if isinstance(capabilities.get("tesseract"), dict) else {}
+    captiocr = capabilities.get("captiocr") if isinstance(capabilities.get("captiocr"), dict) else {}
     lines = [
         "# OCR Backfill Report",
         "",
+        f"- Status: `{summary.get('status', '')}`",
+        f"- OK: `{summary.get('ok', False)}`",
         f"- Bundle: `{root}`",
         f"- Execute: `{summary.get('execute')}`",
         f"- Input JSON: `{summary.get('input_json') or ''}`",
@@ -682,6 +743,10 @@ def _render_ocr_backfill_report(
         f"- Succeeded: {summary.get('succeeded', 0)}",
         f"- Failed: {summary.get('failed', 0)}",
         f"- Planned: {summary.get('planned', 0)}",
+        f"- CaptiOCR capability: `{captiocr.get('status', '')}` / available=`{captiocr.get('available', False)}`",
+        f"- Tesseract capability: `{tesseract.get('status', '')}` / runtime=`{tesseract.get('runtime_available', False)}` / language_ready=`{tesseract.get('language_ready', False)}`",
+        f"- Requested languages: `{', '.join(tesseract.get('requested_languages') or [])}`",
+        f"- Missing languages: `{', '.join(tesseract.get('missing_languages') or [])}`",
         "",
         "## Screen Text Recovery Plan",
         "",
@@ -695,6 +760,13 @@ def _render_ocr_backfill_report(
     lines.extend([""])
     if runner.get("error"):
         lines.extend(["```text", str(runner.get("error") or "").strip(), "```", ""])
+    if recovery_commands:
+        lines.extend(["## Recovery Commands", ""])
+        for row in recovery_commands:
+            lines.append(f"- `{row.get('key', '')}`: `{row.get('command', '')}`")
+            if row.get("reason"):
+                lines.append(f"  - {row.get('reason')}")
+        lines.append("")
     for item in results:
         lines.extend(
             [
@@ -754,6 +826,8 @@ def _build_ocr_backfill_handoff(
     report_path: Path,
     handoff_path: Path,
     handoff_json_path: Path,
+    capabilities: dict[str, Any],
+    recovery_commands: list[dict[str, Any]],
 ) -> dict[str, Any]:
     mcp_args_path = _resolve_manifest_path(root, manifest.get("mcp_ocr_backfill_args"))
     mcp_command = _mcp_command("run_ocr_backfill", mcp_args_path) if mcp_args_path else ""
@@ -781,6 +855,8 @@ def _build_ocr_backfill_handoff(
             "runner_available": bool(runner.get("available")),
             "runner_error": str(runner.get("error") or ""),
         },
+        "capabilities": capabilities,
+        "recovery_commands": recovery_commands,
         "mcp": {
             "tool": "run_ocr_backfill",
             "args_path": str(mcp_args_path) if mcp_args_path else "",
@@ -878,6 +954,8 @@ def _render_ocr_backfill_handoff_markdown(handoff: dict[str, Any]) -> str:
     paths = handoff.get("paths") if isinstance(handoff.get("paths"), dict) else {}
     captiocr = handoff.get("captiocr") if isinstance(handoff.get("captiocr"), dict) else {}
     mcp = handoff.get("mcp") if isinstance(handoff.get("mcp"), dict) else {}
+    capabilities = handoff.get("capabilities") if isinstance(handoff.get("capabilities"), dict) else {}
+    tesseract = capabilities.get("tesseract") if isinstance(capabilities.get("tesseract"), dict) else {}
     lines = [
         "# OCR Backfill Handoff",
         "",
@@ -888,6 +966,8 @@ def _render_ocr_backfill_handoff_markdown(handoff: dict[str, Any]) -> str:
         f"- CaptiOCR root: `{captiocr.get('root', '')}`",
         f"- CaptiOCR checkout available: `{captiocr.get('available')}`",
         f"- CaptiOCR runner available: `{captiocr.get('runner_available')}`",
+        f"- Tesseract status: `{tesseract.get('status', '')}`",
+        f"- Missing languages: `{', '.join(tesseract.get('missing_languages') or [])}`",
         f"- MCP args: `{mcp.get('args_path', '')}`",
         "",
         "## MCP",
@@ -907,6 +987,11 @@ def _render_ocr_backfill_handoff_markdown(handoff: dict[str, Any]) -> str:
             lines.append(f"  Command hint: `{step.get('command_hint')}`")
         if step.get("configure_hint"):
             lines.append(f"  Configure: `{step.get('configure_hint')}`")
+    recovery_commands = [row for row in handoff.get("recovery_commands") or [] if isinstance(row, dict)]
+    if recovery_commands:
+        lines.extend(["", "## Recovery Commands", ""])
+        for row in recovery_commands:
+            lines.append(f"- `{row.get('key', '')}`: `{row.get('command', '')}`")
     lines.extend(
         [
             "",
@@ -951,6 +1036,87 @@ def _render_ocr_backfill_handoff_markdown(handoff: dict[str, Any]) -> str:
             + " |"
         )
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _ocr_capabilities(
+    captiocr: dict[str, Any],
+    runner: dict[str, Any],
+    tesseract: dict[str, Any],
+    *,
+    language: str,
+) -> dict[str, Any]:
+    runner_available = bool(runner.get("available"))
+    checkout_available = bool(captiocr.get("available"))
+    captiocr_status = "ready" if runner_available else "checkout_only" if checkout_available else "unavailable"
+    return {
+        "requested_language": language,
+        "captiocr": {
+            "available": runner_available,
+            "checkout_available": checkout_available,
+            "status": captiocr_status,
+            "root": str(captiocr.get("root") or ""),
+            "error": str(runner.get("error") or ""),
+            "configure_hint": str(captiocr.get("configure_hint") or ""),
+        },
+        "tesseract": dict(tesseract),
+    }
+
+
+def _ocr_result_status(
+    results: list[dict[str, Any]],
+    *,
+    execute: bool,
+    imported: bool,
+    capabilities: dict[str, Any],
+) -> tuple[str, bool]:
+    total = len(results)
+    succeeded = sum(1 for item in results if item.get("ok") and str(item.get("text") or "").strip())
+    if total == 0:
+        return "not_needed", True
+    if not execute and not imported:
+        return "planned", True
+    if succeeded >= total:
+        return "filled", True
+    if succeeded:
+        return "partially_filled", False
+    tesseract = capabilities.get("tesseract") if isinstance(capabilities.get("tesseract"), dict) else {}
+    captiocr = capabilities.get("captiocr") if isinstance(capabilities.get("captiocr"), dict) else {}
+    if bool(tesseract.get("runtime_available")) and not bool(tesseract.get("language_ready")):
+        return "missing_language_packs", False
+    if not bool(captiocr.get("available")) and not bool(tesseract.get("runtime_available")):
+        return "ocr_backend_unavailable", False
+    return "ocr_failed", False
+
+
+def _ocr_recovery_commands(capabilities: dict[str, Any]) -> list[dict[str, str]]:
+    captiocr = capabilities.get("captiocr") if isinstance(capabilities.get("captiocr"), dict) else {}
+    tesseract = capabilities.get("tesseract") if isinstance(capabilities.get("tesseract"), dict) else {}
+    commands: list[dict[str, str]] = []
+    if not tesseract.get("runtime_available"):
+        commands.append(
+            {
+                "key": "configure_tesseract_runtime",
+                "command": "Set LECTURE_TESSERACT_CMD=<tesseract-executable> and LECTURE_TESSDATA_PREFIX=<tessdata-directory>, then rerun run-ocr-backfill.",
+                "reason": "The preflight does not install Tesseract or language data.",
+            }
+        )
+    elif tesseract.get("missing_languages"):
+        commands.append(
+            {
+                "key": "configure_tesseract_languages",
+                "command": "Provide the missing *.traineddata files in <tessdata-directory>, then rerun run-ocr-backfill.",
+                "reason": "Missing languages: " + ", ".join(str(item) for item in tesseract.get("missing_languages") or []),
+            }
+        )
+    if not captiocr.get("checkout_available"):
+        commands.append(
+            {
+                "key": "configure_captiocr",
+                "command": "Set LECTURE_CAPTIOCR_ROOT=<captiocr-root>, or import reviewed OCR JSON through run-ocr-backfill --input-json.",
+                "reason": "CaptiOCR is optional and remains a local fallback/import path.",
+            }
+        )
+    return commands
 
 
 

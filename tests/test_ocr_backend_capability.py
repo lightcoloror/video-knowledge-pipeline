@@ -1,0 +1,141 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import video_knowledge_pipeline.ocr_backfill as ocr_backfill
+from video_knowledge_pipeline.captiocr_resolver import resolve_tesseract_runtime
+
+
+def _bundle(tmp_path: Path) -> Path:
+    bundle = tmp_path / "bundle"
+    assets = bundle / "assets"
+    assets.mkdir(parents=True)
+    frame = assets / "frame.jpg"
+    frame.write_bytes(b"synthetic-image")
+    (bundle / "manifest.json").write_text(
+        json.dumps({"schema": "lecture_webui_bundle.v1"}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    (bundle / "timeline.json").write_text(
+        json.dumps(
+            [
+                {
+                    "index": 1,
+                    "start": 0,
+                    "end": 1,
+                    "visual_route": "semantic_frame",
+                    "frame_paths": [str(frame)],
+                    "quality_issues": ["missing_visual_text"],
+                }
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    return bundle
+
+
+def test_tesseract_runtime_reports_requested_missing_languages(tmp_path: Path) -> None:
+    executable = tmp_path / "tesseract.exe"
+    executable.write_bytes(b"")
+    tessdata = tmp_path / "tessdata"
+    tessdata.mkdir()
+    (tessdata / "eng.traineddata").write_bytes(b"fixture")
+
+    result = resolve_tesseract_runtime(
+        explicit_cmd=executable,
+        explicit_tessdata=tessdata,
+        required_languages="chi_sim+eng",
+    )
+
+    assert result["runtime_available"] is True
+    assert result["installed_languages"] == ["eng"]
+    assert result["requested_languages"] == ["chi_sim", "eng"]
+    assert result["missing_languages"] == ["chi_sim"]
+    assert result["language_ready"] is False
+    assert result["status"] == "missing_language_packs"
+
+
+def test_ocr_missing_language_fails_before_subprocess_and_is_visible(tmp_path: Path, monkeypatch) -> None:
+    bundle = _bundle(tmp_path)
+    tesseract = {
+        "available": True,
+        "runtime_available": True,
+        "cmd": str(tmp_path / "tesseract.exe"),
+        "tessdata_prefix": str(tmp_path / "tessdata"),
+        "requested_languages": ["chi_sim", "eng"],
+        "installed_languages": ["eng"],
+        "missing_languages": ["chi_sim"],
+        "language_ready": False,
+        "status": "missing_language_packs",
+    }
+    monkeypatch.setattr(
+        ocr_backfill,
+        "_load_captiocr_runner",
+        lambda *args, **kwargs: (
+            {
+                "available": False,
+                "name": "captiocr",
+                "root": "",
+                "tesseract": tesseract,
+                "error": "CaptiOCR unavailable",
+            },
+            None,
+            None,
+        ),
+    )
+    monkeypatch.setattr(
+        ocr_backfill.subprocess,
+        "run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("subprocess must not run")),
+    )
+
+    result = ocr_backfill.run_ocr_backfill(bundle, execute=True, language="chi_sim+eng")
+
+    assert result["ok"] is False
+    assert result["status"] == "missing_language_packs"
+    assert result["capabilities"]["tesseract"]["missing_languages"] == ["chi_sim"]
+    assert result["summary"]["failed"] == 1
+    assert "missing_language_packs" in result["items"][0]["stderr"]
+    report = Path(result["report_path"]).read_text(encoding="utf-8")
+    assert "missing_language_packs" in report
+    assert "chi_sim" in report
+
+
+def test_ocr_reports_both_backends_unavailable(tmp_path: Path, monkeypatch) -> None:
+    bundle = _bundle(tmp_path)
+    tesseract = {
+        "available": False,
+        "runtime_available": False,
+        "cmd": "",
+        "tessdata_prefix": "",
+        "requested_languages": ["eng"],
+        "installed_languages": [],
+        "missing_languages": ["eng"],
+        "language_ready": False,
+        "status": "runtime_unavailable",
+    }
+    monkeypatch.setattr(
+        ocr_backfill,
+        "_load_captiocr_runner",
+        lambda *args, **kwargs: (
+            {
+                "available": False,
+                "name": "captiocr",
+                "root": "",
+                "tesseract": tesseract,
+                "error": "CaptiOCR import unavailable",
+            },
+            None,
+            None,
+        ),
+    )
+
+    result = ocr_backfill.run_ocr_backfill(bundle, execute=True, language="eng")
+
+    assert result["ok"] is False
+    assert result["status"] == "ocr_backend_unavailable"
+    assert result["capabilities"]["captiocr"]["available"] is False
+    assert result["capabilities"]["tesseract"]["runtime_available"] is False
+    assert result["recovery_commands"]

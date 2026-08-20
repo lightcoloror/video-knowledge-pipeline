@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import re
 import shutil
+import sys
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +19,109 @@ from .storage import write_json
 from .tool_research import recommended_trial_order
 
 LOCAL_TOOL_INVENTORY_SCHEMA = "lecture_local_tool_inventory.v1"
+LOCAL_RUNTIME_PREFLIGHT_SCHEMA = "video_knowledge_pipeline.local_runtime_preflight.v1"
+
+
+def local_runtime_preflight(project_root: str | Path | None = None) -> dict[str, Any]:
+    """Inspect the local Python/media runtime without installing or executing tools."""
+    root = (
+        Path(project_root).expanduser().resolve()
+        if project_root is not None
+        else Path(__file__).resolve().parents[2]
+    )
+    executable = Path(sys.executable).expanduser()
+    resolved_executable = executable.resolve()
+    prefix = Path(sys.prefix).expanduser().resolve()
+    base_prefix = Path(sys.base_prefix).expanduser().resolve()
+    pyvenv_cfg = prefix / "pyvenv.cfg"
+    pyproject_path = root / "pyproject.toml"
+    project = _read_pyproject(pyproject_path)
+    dependency_rows = _core_dependency_rows(project)
+    missing_dependencies = [row["import_name"] for row in dependency_rows if not row["available"]]
+    ffmpeg = resolve_media_tool("ffmpeg")
+    ffprobe = resolve_media_tool("ffprobe")
+    tesseract = resolve_tesseract()
+    uv = shutil.which("uv") or ""
+    checks = [
+        _runtime_check("python:version", sys.version_info >= (3, 11), f"Python {'.'.join(str(value) for value in sys.version_info[:3])}"),
+        _runtime_check("python:executable", resolved_executable.is_absolute() and resolved_executable.exists(), str(resolved_executable)),
+        _runtime_check("project:pyproject", pyproject_path.is_file(), str(pyproject_path)),
+        _runtime_check("dependencies:core", not missing_dependencies, ",".join(missing_dependencies) or "all core imports available"),
+        _runtime_check("media:ffmpeg", bool(ffmpeg), ffmpeg or "FFMPEG_BINARY/LECTURE_FFMPEG_DIR not resolved"),
+        _runtime_check("media:ffprobe", bool(ffprobe), ffprobe or "FFPROBE_BINARY/LECTURE_FFMPEG_DIR not resolved"),
+    ]
+    failed_checks = [row["check_id"] for row in checks if row["status"] == "failed"]
+    recovery_commands: list[dict[str, str]] = []
+    if not resolved_executable.exists() or not pyvenv_cfg.exists():
+        recovery_commands.append(
+            {
+                "key": "prepare_uv_venv",
+                "command": "uv venv .venv --python 3.11",
+                "reason": "Create the project-local virtual environment; this preflight never executes the command.",
+            }
+        )
+    if missing_dependencies:
+        recovery_commands.append(
+            {
+                "key": "sync_project_dependencies",
+                "command": "uv sync --extra dev --python <venv-python>",
+                "reason": "Install only after explicit operator approval; missing imports: " + ", ".join(missing_dependencies),
+            }
+        )
+    if not ffmpeg or not ffprobe:
+        recovery_commands.append(
+            {
+                "key": "configure_media_tools",
+                "command": "Set FFMPEG_BINARY=<ffmpeg-path> and FFPROBE_BINARY=<ffprobe-path>, then rerun local-runtime-preflight.",
+                "reason": "VKP resolves media binaries through media_tools; no machine path is embedded here.",
+            }
+        )
+    ok = not failed_checks
+    return {
+        "schema": LOCAL_RUNTIME_PREFLIGHT_SCHEMA,
+        "checked_at": now_iso(),
+        "ok": ok,
+        "status": "ready" if ok else "not_ready",
+        "project_root": str(root),
+        "runtime": {
+            "python": {
+                "executable": str(resolved_executable),
+                "exists": resolved_executable.exists(),
+                "absolute": resolved_executable.is_absolute(),
+                "version": ".".join(str(value) for value in sys.version_info[:3]),
+                "required_python": str(project.get("requires-python") or ""),
+            },
+            "venv": {
+                "active": prefix != base_prefix,
+                "prefix": str(prefix),
+                "base_prefix": str(base_prefix),
+                "pyvenv_cfg": str(pyvenv_cfg),
+                "pyvenv_cfg_exists": pyvenv_cfg.is_file(),
+            },
+            "uv": {"available": bool(uv), "path": str(Path(uv).resolve()) if uv else ""},
+        },
+        "capabilities": {
+            "media": {
+                "ffmpeg": {"available": bool(ffmpeg), "path": ffmpeg},
+                "ffprobe": {"available": bool(ffprobe), "path": ffprobe},
+                "tesseract": {"available": bool(tesseract), "path": tesseract},
+            },
+            "dependencies": {
+                "required": dependency_rows,
+                "missing": missing_dependencies,
+            },
+        },
+        "checks": checks,
+        "failed_checks": failed_checks,
+        "recovery_commands": recovery_commands,
+        "boundaries": {
+            "installs_dependencies": False,
+            "starts_service": False,
+            "processes_media": False,
+            "reads_configuration_secrets": False,
+            "makes_network_request": False,
+        },
+    }
 
 
 def local_tool_inventory(output_dir: str | Path | None = None, *, write: bool = False) -> dict[str, Any]:
@@ -29,6 +135,7 @@ def local_tool_inventory(output_dir: str | Path | None = None, *, write: bool = 
     by_name = {str(row.get("name") or "").lower(): row for row in tool_rows}
     asr = detect_asr_runners()
     media = _media_tools()
+    runtime_preflight = local_runtime_preflight()
     tools = [
         _local_project_tool(
             "BiliNote",
@@ -81,6 +188,7 @@ def local_tool_inventory(output_dir: str | Path | None = None, *, write: bool = 
         "tools": tools,
         "asr": asr,
         "media": media,
+        "runtime_preflight": runtime_preflight,
         "next_action": _next_action(summary, tools, asr, media),
     }
     if output_dir:
@@ -314,3 +422,37 @@ def _first_available(tools: list[dict[str, Any]], names: list[str]) -> dict[str,
 
 def _available(tools: list[dict[str, Any]], name: str) -> bool:
     return any(str(tool.get("name") or "").lower() == name.lower() and tool.get("available") for tool in tools)
+
+
+def _runtime_check(check_id: str, ok: bool, detail: str) -> dict[str, str]:
+    return {"check_id": check_id, "status": "passed" if ok else "failed", "detail": detail}
+
+
+def _read_pyproject(path: Path) -> dict[str, Any]:
+    try:
+        with path.open("rb") as handle:
+            payload = tomllib.load(handle)
+    except (OSError, tomllib.TOMLDecodeError):
+        return {}
+    project = payload.get("project") if isinstance(payload, dict) else {}
+    return dict(project) if isinstance(project, dict) else {}
+
+
+def _core_dependency_rows(project: dict[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for requirement in project.get("dependencies") or []:
+        package = re.split(r"[<>=!~;\s\[]", str(requirement), maxsplit=1)[0].strip()
+        if not package:
+            continue
+        import_name = {
+            "markdown-it-py": "markdown_it",
+        }.get(package.lower(), package.replace("-", "_"))
+        rows.append(
+            {
+                "requirement": str(requirement),
+                "package": package,
+                "import_name": import_name,
+                "available": importlib.util.find_spec(import_name) is not None,
+            }
+        )
+    return rows

@@ -28,19 +28,24 @@ from .visual_integration import integrated_visual
 from .vlm_preprocess import prepare_image_probe
 
 
-def call_vision_model(*, provider_config, prompt, image_paths, allowed_roots=None):
+def call_vision_model(*, provider_config, prompt, image_paths, allowed_roots=None, max_tokens=None):
+    kwargs = {
+        "provider_config": provider_config,
+        "prompt": prompt,
+        "image_paths": image_paths,
+        "allowed_roots": allowed_roots,
+        "execute": True,
+        "write": False,
+    }
+    if max_tokens is not None:
+        kwargs["max_tokens"] = max_tokens
     return model_task_api_call(
         "multimodal_frame_analysis",
-        provider_config=provider_config,
-        prompt=prompt,
-        image_paths=image_paths,
-        allowed_roots=allowed_roots,
-        execute=True,
-        write=False,
+        **kwargs,
     )
 
 
-def call_vision_model_with_broker_reservation(*, provider_config, prompt, image_paths, allowed_roots=None):
+def call_vision_model_with_broker_reservation(*, provider_config, prompt, image_paths, allowed_roots=None, max_tokens=None):
     """Invoke one remote proxy request only inside the consent-bound runtime grant."""
     config = dict(provider_config or {})
     is_remote_proxy = (
@@ -48,13 +53,19 @@ def call_vision_model_with_broker_reservation(*, provider_config, prompt, image_
         and str(config.get("execution_location") or "").strip().lower() == "remote"
     )
     if not is_remote_proxy:
-        return call_vision_model(provider_config=config, prompt=prompt, image_paths=image_paths, allowed_roots=allowed_roots)
+        kwargs = {"provider_config": config, "prompt": prompt, "image_paths": image_paths, "allowed_roots": allowed_roots}
+        if max_tokens is not None:
+            kwargs["max_tokens"] = max_tokens
+        return call_vision_model(**kwargs)
     with authorise_consented_remote_runtime(
         consent_id=str(config.get("consent_id") or ""),
         route_revision=str(config.get("route_revision") or ""),
         max_calls=1,
     ):
-        return call_vision_model(provider_config=config, prompt=prompt, image_paths=image_paths, allowed_roots=allowed_roots)
+        kwargs = {"provider_config": config, "prompt": prompt, "image_paths": image_paths, "allowed_roots": allowed_roots}
+        if max_tokens is not None:
+            kwargs["max_tokens"] = max_tokens
+        return call_vision_model(**kwargs)
 
 def run_multimodal_frame_analysis(
     bundle_dir: str | Path,
@@ -72,6 +83,7 @@ def run_multimodal_frame_analysis(
     vision_retry_delay_seconds: float = 0.0,
     execution_actor: str = "operator",
     export_consent: str | Path | None = None,
+    max_tokens: int | None = None,
 ) -> dict[str, Any]:
     root = Path(bundle_dir).expanduser().resolve()
     manifest_path = root / "manifest.json"
@@ -149,6 +161,13 @@ def run_multimodal_frame_analysis(
             "executed": bool(execute and not gate),
             "ok": False,
             "error": str(gate.get("error") or "") if gate else "",
+            "request_mode": "single_frame",
+            "max_images_per_request": 1,
+            "request_max_tokens": int(max_tokens) if max_tokens is not None else None,
+            "request_max_tokens_omitted": max_tokens is None,
+            "finish_reason": "",
+            "truncated": False,
+            "complete": False,
         }
         if execute and not gate and batch_abort_error:
             result["executed"] = False
@@ -165,6 +184,9 @@ def run_multimodal_frame_analysis(
                 jpeg_quality=effective_image_probe_jpeg_quality,
             )
             sent_image_paths = [str(path) for path in image_probe.get("image_paths") or original_image_paths if str(path)]
+            call_kwargs: dict[str, Any] = {"allowed_roots": [str(root)]}
+            if max_tokens is not None:
+                call_kwargs["max_tokens"] = max_tokens
             response = call_vision_model_with_retries(
                 provider_config=cfg,
                 prompt=str(result["prompt"]),
@@ -172,20 +194,32 @@ def run_multimodal_frame_analysis(
                 attempts=vision_retries,
                 delay_seconds=vision_retry_delay_seconds,
                 call_model=call_vision_model_with_broker_reservation,
-                call_kwargs={"allowed_roots": [str(root)]},
+                call_kwargs=call_kwargs,
             )
+            truncated = bool(response.get("truncated"))
+            complete = bool(response.get("complete", response.get("ok") and not truncated)) and not truncated
+            response_error = str(response.get("error") or "")
+            if truncated and not response_error:
+                response_error = "model_output_truncated"
             result.update(
                 {
-                    "ok": response.get("ok"),
-                    "error": response.get("error", ""),
+                    "ok": bool(response.get("ok")) and complete,
+                    "status": "truncated" if truncated else str(response.get("status") or ("ok" if response.get("ok") else "failed")),
+                    "error": response_error,
                     "raw_content": response.get("content", ""),
                     "sent_image_paths": sent_image_paths,
+                    "sent_image_count": len(sent_image_paths),
                     "image_probe": image_probe,
                     "attempts": response.get("attempts", []),
                     "attempt_count": response.get("attempt_count", 1),
+                    "request_max_tokens": response.get("request_max_tokens", max_tokens),
+                    "request_max_tokens_omitted": bool(response.get("request_max_tokens_omitted", max_tokens is None)),
+                    "finish_reason": str(response.get("finish_reason") or ""),
+                    "truncated": truncated,
+                    "complete": complete,
                 }
             )
-            if response.get("ok"):
+            if response.get("ok") and complete:
                 understanding = _normalise_visual_understanding(parse_model_json(str(response.get("content") or "")), candidate)
                 _apply_single(timeline, int(candidate["index"]), "visual_understanding", understanding)
                 applied.append(int(candidate["index"]))
@@ -216,6 +250,13 @@ def run_multimodal_frame_analysis(
         "image_probe_jpeg_quality": effective_image_probe_jpeg_quality,
         "vision_retries": int(vision_retries or 1),
         "vision_retry_delay_seconds": float(vision_retry_delay_seconds or 0),
+        "request_max_tokens": int(max_tokens) if max_tokens is not None else None,
+        "request_max_tokens_omitted": max_tokens is None,
+        "request_mode": "single_frame",
+        "max_images_per_request": 1,
+        "complete_count": sum(1 for item in results if item.get("complete")),
+        "truncated_count": sum(1 for item in results if item.get("truncated")),
+        "failed_count": sum(1 for item in results if item.get("executed") and not item.get("ok")),
         "imported": len(imported),
         "updated": len(set(applied)),
         "provider": {
@@ -1220,6 +1261,8 @@ def _vision_analysis_run_record(
         "skipped_count": sum(1 for item in results if not item.get("executed")),
         "parse_failed_count": sum(1 for item in results if _result_understanding(item).get("parse_failed")),
         "incomplete_count": sum(1 for item in results if _result_understanding(item).get("validation_status") == "incomplete"),
+        "complete_count": sum(1 for item in results if item.get("complete")),
+        "truncated_count": sum(1 for item in results if item.get("truncated")),
         "updated_count": int(summary.get("updated") or 0),
         "timeline_diff_count": len(timeline_diff),
         "timeline_diff": timeline_diff,

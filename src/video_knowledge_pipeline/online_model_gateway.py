@@ -153,14 +153,29 @@ def online_model_api_call(
             return _write_result(result, output_dir=output_dir, write=write)
         cfg = resolve_provider_config(provider_config)
         if _should_use_litellm(cfg):
-            call = call_litellm_chat(provider_config=cfg, messages=_vision_messages(kind, prompt_text, input_text, images), temperature=0)
+            call = call_litellm_chat(
+                provider_config=cfg,
+                messages=_vision_messages(kind, prompt_text, input_text, images),
+                temperature=0,
+                max_tokens=max_tokens,
+            )
             if _should_fallback_from_litellm(cfg, call):
                 call = _with_litellm_fallback_metadata(
-                    call_vision_model(provider_config=cfg, prompt=_vision_prompt(kind, prompt_text, input_text), image_paths=images),
+                    _call_vision_with_optional_tokens(
+                        provider_config=cfg,
+                        prompt=_vision_prompt(kind, prompt_text, input_text),
+                        image_paths=images,
+                        max_tokens=max_tokens,
+                    ),
                     litellm_call=call,
                 )
         else:
-            call = call_vision_model(provider_config=cfg, prompt=_vision_prompt(kind, prompt_text, input_text), image_paths=images)
+            call = _call_vision_with_optional_tokens(
+                provider_config=cfg,
+                prompt=_vision_prompt(kind, prompt_text, input_text),
+                image_paths=images,
+                max_tokens=max_tokens,
+            )
         result.update(_call_result(call))
     elif kind in TEXT_MODEL_TYPES:
         cfg = resolve_text_provider_config(provider_config)
@@ -229,7 +244,7 @@ def call_litellm_chat(
     try:
         import litellm  # type: ignore[import-not-found]
     except ImportError:
-        return {"ok": False, "error": "litellm_not_installed", "content": ""}
+        return _completion_result({"ok": False, "error": "litellm_not_installed", "content": ""}, max_tokens=max_tokens)
     cfg = dict(provider_config or {})
     kwargs: dict[str, Any] = {
         "model": cfg.get("model"),
@@ -255,7 +270,7 @@ def call_litellm_chat(
     try:
         response = litellm.completion(**kwargs)
     except Exception as exc:  # pragma: no cover - optional network/provider path.
-        return {"ok": False, "error": str(exc), "content": ""}
+        return _completion_result({"ok": False, "error": str(exc), "content": ""}, max_tokens=max_tokens)
     payload = _safe_litellm_response(response)
     try:
         choice = payload["choices"][0]
@@ -273,8 +288,16 @@ def call_litellm_chat(
         detail = f"empty_content; finish_reason={finish_reason or 'unknown'}"
         if reasoning_chars:
             detail = f"empty_content_reasoning_only; finish_reason={finish_reason or 'unknown'}; reasoning_chars={reasoning_chars}"
-        return {"ok": False, "error": detail, "content": "", "raw_response": payload}
-    return {"ok": True, "error": "", "content": content, "raw_response": payload}
+        return _completion_result(
+            {"ok": False, "error": detail, "content": "", "raw_response": payload},
+            max_tokens=max_tokens,
+            finish_reason=finish_reason,
+        )
+    return _completion_result(
+        {"ok": True, "error": "", "content": content, "raw_response": payload},
+        max_tokens=max_tokens,
+        finish_reason=finish_reason,
+    )
 
 
 def call_litellm_asr(*, provider_config: dict[str, Any], audio_path: str, prompt: str = "") -> dict[str, Any]:
@@ -558,8 +581,49 @@ def _call_result(call: dict[str, Any]) -> dict[str, Any]:
         "raw_response": call.get("raw_response"),
         "fallback_from": call.get("fallback_from", ""),
         "litellm_error": call.get("litellm_error", ""),
+        "request_max_tokens": call.get("request_max_tokens"),
+        "request_max_tokens_omitted": bool(call.get("request_max_tokens_omitted", True)),
+        "finish_reason": str(call.get("finish_reason") or ""),
+        "truncated": bool(call.get("truncated")),
+        "complete": bool(call.get("complete", ok and not call.get("truncated"))),
         "secrets_redacted": True,
         "remote_requests_made": bool(call.get("remote_requests_made", ok)),
+    }
+
+
+def _call_vision_with_optional_tokens(
+    *,
+    provider_config: dict[str, Any],
+    prompt: str,
+    image_paths: list[str],
+    max_tokens: int | None,
+) -> dict[str, Any]:
+    if max_tokens is None:
+        return call_vision_model(provider_config=provider_config, prompt=prompt, image_paths=image_paths)
+    return call_vision_model(
+        provider_config=provider_config,
+        prompt=prompt,
+        image_paths=image_paths,
+        max_tokens=max_tokens,
+    )
+
+
+def _completion_result(
+    result: dict[str, Any],
+    *,
+    max_tokens: int | None,
+    finish_reason: str = "",
+) -> dict[str, Any]:
+    request_max_tokens = int(max_tokens) if max_tokens is not None and int(max_tokens) > 0 else None
+    normalised_finish = str(finish_reason or "").strip().lower()
+    truncated = normalised_finish in {"length", "max_tokens", "max_token", "token_limit"}
+    return {
+        **result,
+        "request_max_tokens": request_max_tokens,
+        "request_max_tokens_omitted": request_max_tokens is None,
+        "finish_reason": str(finish_reason or ""),
+        "truncated": truncated,
+        "complete": bool(result.get("ok")) and not truncated,
     }
 
 
