@@ -5,6 +5,7 @@ import subprocess
 from pathlib import Path
 
 import video_knowledge_pipeline.ocr_backfill as ocr_backfill
+import video_knowledge_pipeline.captiocr_resolver as captiocr_resolver
 from video_knowledge_pipeline.captiocr_resolver import resolve_tesseract_runtime
 
 
@@ -56,6 +57,40 @@ def test_tesseract_runtime_reports_requested_missing_languages(tmp_path: Path) -
     assert result["missing_languages"] == ["chi_sim"]
     assert result["language_ready"] is False
     assert result["status"] == "missing_language_packs"
+
+
+def test_tesseract_runtime_auto_selects_language_ready_installation(
+    tmp_path: Path, monkeypatch
+) -> None:
+    incomplete_root = tmp_path / "incomplete"
+    complete_root = tmp_path / "complete"
+    incomplete_cmd = incomplete_root / "tesseract.exe"
+    complete_cmd = complete_root / "tesseract.exe"
+    incomplete_cmd.parent.mkdir(parents=True)
+    complete_cmd.parent.mkdir(parents=True)
+    incomplete_cmd.write_bytes(b"")
+    complete_cmd.write_bytes(b"")
+    incomplete_data = incomplete_root / "tessdata"
+    complete_data = complete_root / "tessdata"
+    incomplete_data.mkdir()
+    complete_data.mkdir()
+    (incomplete_data / "chi_sim.traineddata").write_bytes(b"fixture")
+    (complete_data / "chi_sim.traineddata").write_bytes(b"fixture")
+    (complete_data / "eng.traineddata").write_bytes(b"fixture")
+
+    monkeypatch.setattr(
+        captiocr_resolver,
+        "_tesseract_cmd_candidates",
+        lambda explicit_cmd=None: [incomplete_cmd, complete_cmd],
+    )
+
+    result = resolve_tesseract_runtime(required_languages="chi_sim+eng")
+
+    assert result["status"] == "ready"
+    assert result["cmd"] == str(complete_cmd.resolve())
+    assert result["tessdata_prefix"] == str(complete_data.resolve())
+    assert result["missing_languages"] == []
+    assert result["selection_reason"] == "required_languages_ready"
 
 
 def test_ocr_missing_language_fails_before_subprocess_and_is_visible(tmp_path: Path, monkeypatch) -> None:
@@ -125,9 +160,11 @@ def test_multilingual_ocr_bypasses_captiocr_and_runs_tesseract_once(tmp_path: Pa
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("CaptiOCR must be bypassed for multilingual OCR")),
     )
     commands: list[list[str]] = []
+    environments: list[dict[str, str]] = []
 
     def fake_run(command, **kwargs):
         commands.append(command)
+        environments.append(kwargs["env"])
         return subprocess.CompletedProcess(command, 0, stdout="中文 English", stderr="")
 
     monkeypatch.setattr(ocr_backfill.subprocess, "run", fake_run)
@@ -139,6 +176,7 @@ def test_multilingual_ocr_bypasses_captiocr_and_runs_tesseract_once(tmp_path: Pa
     assert result["runner"]["route_reason"] == "multilingual_request_requires_tesseract_cli"
     assert result["capabilities"]["captiocr"]["available"] is False
     assert commands == [[tesseract["cmd"], str((bundle / "assets" / "frame.jpg").resolve()), "stdout", "-l", "chi_sim+eng"]]
+    assert environments[0]["TESSDATA_PREFIX"] == tesseract["tessdata_prefix"]
     timeline = json.loads((bundle / "timeline.json").read_text(encoding="utf-8"))
     assert timeline[0]["visual_text"] == "中文 English"
 

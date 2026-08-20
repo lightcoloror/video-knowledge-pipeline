@@ -1,5 +1,12 @@
 # AGENT_DISCOVERY
 
+## 2026-08-20 WorkBuddy feedback closure
+
+- Multilingual OCR now selects a Tesseract executable/tessdata pair that satisfies all requested languages and passes the chosen `TESSDATA_PREFIX` to the child process; explicit command/data overrides remain strict.
+- Final knowledge notes expose imported RAM++ tags only as `候选标签（未人工确认）`; they are not promoted into facts or summaries.
+- `long-video-fast-segment-plan` accepts `--activity-audit-path`; only completed source-media/VAD-hash-bound audits are accepted, and non-silent uncovered audio always remains review-only.
+- Verification: focused 18/18 and associated 54/54 synthetic tests, Ruff, and diff check passed. No model load, media processing, service, network request, dependency installation, provider call, or automatic media deletion occurred.
+
 ## 2026-08-17 正式产物硬门与采访档案
 
 - `production-artifact-gate <bundle>`：统一检查转录、说话人、语义事实、隐私和发布状态；失败时所有 Smart Summary Provider 执行入口在调用前 fail-closed。

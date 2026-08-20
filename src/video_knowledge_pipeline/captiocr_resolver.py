@@ -75,19 +75,51 @@ def resolve_tesseract_runtime(
     required_languages: str | list[str] | tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
     """Find a usable Tesseract executable/tessdata pair for CaptiOCR reuse."""
-    cmd_candidates = _tesseract_cmd_candidates(explicit_cmd)
-    selected_cmd = next((path for path in cmd_candidates if path.exists()), None)
-    tessdata_candidates = _tessdata_candidates(explicit_tessdata, selected_cmd)
-    selected_tessdata = next(
-        (path for path in tessdata_candidates if path.is_dir() and any(path.glob("*.traineddata"))),
-        None,
-    )
-    installed_languages = (
-        sorted(path.stem for path in selected_tessdata.glob("*.traineddata") if path.is_file())
-        if selected_tessdata
-        else []
-    )
     requested_languages = _normalise_languages(required_languages)
+    cmd_candidates = _tesseract_cmd_candidates(explicit_cmd)
+    configured_cmd = explicit_cmd or os.environ.get(TESSERACT_ENV_VAR, "").strip()
+    configured_tessdata = explicit_tessdata or os.environ.get(TESSDATA_ENV_VAR, "").strip()
+    if configured_cmd:
+        cmd_candidates = cmd_candidates[:1]
+    pairs: list[dict[str, Any]] = []
+    checked_tessdata: list[Path] = []
+    for cmd_index, cmd in enumerate(cmd_candidates):
+        if not cmd.exists() or not cmd.is_file():
+            continue
+        tessdata_candidates = _tessdata_candidates(configured_tessdata, cmd)
+        if configured_tessdata:
+            tessdata_candidates = tessdata_candidates[:1]
+        checked_tessdata.extend(tessdata_candidates)
+        for data_index, tessdata in enumerate(tessdata_candidates):
+            if not tessdata.is_dir():
+                continue
+            installed = sorted(
+                path.stem for path in tessdata.glob("*.traineddata") if path.is_file()
+            )
+            if not installed:
+                continue
+            missing = [language for language in requested_languages if language not in installed]
+            adjacent = _tessdata_is_adjacent(cmd, tessdata)
+            pairs.append(
+                {
+                    "cmd": cmd,
+                    "tessdata": tessdata,
+                    "installed_languages": installed,
+                    "missing_languages": missing,
+                    "language_ready": not missing,
+                    "score": (
+                        int(not missing),
+                        len(requested_languages) - len(missing),
+                        int(adjacent),
+                        -cmd_index,
+                        -data_index,
+                    ),
+                }
+            )
+    selected = max(pairs, key=lambda row: row["score"]) if pairs else {}
+    selected_cmd = selected.get("cmd")
+    selected_tessdata = selected.get("tessdata")
+    installed_languages = list(selected.get("installed_languages") or [])
     missing_languages = [language for language in requested_languages if language not in installed_languages]
     runtime_available = bool(selected_cmd and selected_tessdata)
     language_ready = runtime_available and not missing_languages
@@ -97,6 +129,12 @@ def resolve_tesseract_runtime(
         status = "missing_language_packs"
     else:
         status = "ready"
+    if language_ready and requested_languages:
+        selection_reason = "required_languages_ready"
+    elif runtime_available:
+        selection_reason = "best_available_language_coverage"
+    else:
+        selection_reason = "runtime_unavailable"
     return {
         "available": bool(runtime_available and language_ready),
         "runtime_available": runtime_available,
@@ -107,8 +145,19 @@ def resolve_tesseract_runtime(
         "requested_languages": requested_languages,
         "missing_languages": missing_languages,
         "language_ready": language_ready,
+        "selection_reason": selection_reason,
         "checked_cmds": [str(path) for path in cmd_candidates],
-        "checked_tessdata": [str(path) for path in tessdata_candidates],
+        "checked_tessdata": [str(path) for path in _unique_paths(checked_tessdata)],
+        "candidate_pairs": [
+            {
+                "cmd": str(row["cmd"]),
+                "tessdata_prefix": str(row["tessdata"]),
+                "installed_languages": row["installed_languages"],
+                "missing_languages": row["missing_languages"],
+                "language_ready": row["language_ready"],
+            }
+            for row in pairs
+        ],
         "configure_hint": f"Set {TESSERACT_ENV_VAR} and {TESSDATA_ENV_VAR} when Tesseract is not in PATH.",
     }
 
@@ -124,12 +173,14 @@ def _tesseract_cmd_candidates(explicit_cmd: str | Path | None = None) -> list[Pa
         found = shutil.which(command)
         if found:
             candidates.append(Path(found))
-    candidates.extend(
-        [
-            Path("C:/Program Files/Tesseract-OCR/tesseract.exe"),
-            Path("C:/Program Files (x86)/Tesseract-OCR/tesseract.exe"),
-        ]
-    )
+    for drive in _installation_drive_roots():
+        candidates.extend(
+            [
+                drive / "Program Files" / "Tesseract-OCR" / "tesseract.exe",
+                drive / "Program Files (x86)" / "Tesseract-OCR" / "tesseract.exe",
+                drive / "Program Files" / "PDF24" / "tesseract" / "tesseract.exe",
+            ]
+        )
     return _unique_paths(candidates)
 
 
@@ -152,14 +203,40 @@ def _tessdata_candidates(
                 cmd.parent.parent / "app" / "tesseract" / "tessdata",
             ]
         )
-    candidates.extend(
-        [
-            Path("C:/Program Files/Tesseract-OCR/tessdata"),
-            Path("C:/Program Files (x86)/Tesseract-OCR/tessdata"),
-            workspace_root() / "tools",
-        ]
-    )
+    for drive in _installation_drive_roots():
+        candidates.extend(
+            [
+                drive / "Program Files" / "Tesseract-OCR" / "tessdata",
+                drive / "Program Files (x86)" / "Tesseract-OCR" / "tessdata",
+                drive / "Program Files" / "PDF24" / "tesseract" / "tessdata",
+            ]
+        )
+    candidates.append(workspace_root() / "tools")
     return _unique_paths(candidates)
+
+
+def _installation_drive_roots() -> list[Path]:
+    roots: list[Path] = []
+    for value in (
+        Path.home(),
+        workspace_root(),
+        Path.cwd(),
+        Path(os.environ.get("ProgramFiles", "")),
+        Path(os.environ.get("ProgramFiles(x86)", "")),
+    ):
+        anchor = value.anchor
+        if anchor:
+            roots.append(Path(anchor))
+    return _unique_paths(roots)
+
+
+def _tessdata_is_adjacent(cmd: Path, tessdata: Path) -> bool:
+    adjacent = {
+        (cmd.parent / "tessdata").resolve(),
+        (cmd.parent.parent / "tessdata").resolve(),
+        (cmd.parent.parent / "app" / "tesseract" / "tessdata").resolve(),
+    }
+    return tessdata.resolve() in adjacent
 
 
 def _unique_paths(paths: list[Path]) -> list[Path]:

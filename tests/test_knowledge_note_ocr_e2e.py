@@ -27,6 +27,7 @@ def test_imported_ocr_evidence_reaches_final_knowledge_note(tmp_path: Path) -> N
                     "transcript": "老师说明这一页的流程。",
                     "visual_route": "document_visual",
                     "frame_paths": [str(frame)],
+                    "tagger_tags": ["presentation screen", "indoor", "presentation screen"],
                     "quality_issues": ["missing_visual_text"],
                 }
             ],
@@ -65,3 +66,6 @@ def test_imported_ocr_evidence_reaches_final_knowledge_note(tmp_path: Path) -> N
     final_note = Path(exported["note_path"]).read_text(encoding="utf-8")
     assert f"画面文字/OCR：{ocr_phrase}" in full_transcript
     assert ocr_phrase in final_note
+    assert "RAM++ 候选标签（未人工确认）" in final_note
+    assert "presentation screen" in final_note
+    assert "indoor" in final_note

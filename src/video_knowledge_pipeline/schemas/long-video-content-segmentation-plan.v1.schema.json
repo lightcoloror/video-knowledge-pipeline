@@ -18,7 +18,7 @@
           "candidate_id": {"type": "string", "minLength": 1},
           "start": {"type": "number", "minimum": 0},
           "end": {"type": "number", "exclusiveMinimum": 0},
-          "kind": {"enum": ["long_silence", "intro_outro_blank", "waiting_or_technical_setup", "possible_retake_or_restatement", "non_information_smalltalk", "technical_blank"]},
+          "kind": {"enum": ["long_silence", "intro_outro_blank", "waiting_or_technical_setup", "possible_retake_or_restatement", "non_information_smalltalk", "technical_blank", "audio_activity_without_vad"]},
           "classification": {"enum": ["drop_safe_candidate", "drop_review_required", "unknown_keep"]},
           "reason": {"type": "string", "minLength": 1},
           "evidence_ids": {"type": "array", "items": {"type": "string"}},

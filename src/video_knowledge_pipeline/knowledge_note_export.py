@@ -2725,6 +2725,9 @@ def _transcript_visual_note(item: dict[str, Any]) -> str:
     visual_text = _item_visual_text(item)
     if visual_text:
         parts.append("画面文字/OCR：" + _truncate(visual_text, 160))
+    tagger_tags = _item_tagger_tags(item)
+    if tagger_tags:
+        parts.append("RAM++ 候选标签（未人工确认）：" + "、".join(tagger_tags))
     visual = _item_visual_understanding(item)
     if visual:
         compact = _compact_mapping(visual, keys=["actions", "interface_state", "instructor_focus", "non_text_information", "keep_image_reason"])
@@ -3105,6 +3108,9 @@ def _visual_description_lines(
             if markdown:
                 lines.append("")
                 lines.append(markdown)
+    tagger_tags = _item_tagger_tags(item)
+    if tagger_tags:
+        lines.append("- **RAM++ 候选标签（未人工确认）**：" + "、".join(tagger_tags))
     if visual:
         compact = _compact_mapping(
             visual,
@@ -3421,6 +3427,28 @@ def _item_visual_understanding(item: dict[str, Any]) -> dict[str, Any]:
         or _valid_understanding(_human_review(item).get("corrected_visual_understanding"))
         or _valid_understanding(item.get("visual_understanding"))
     )
+
+
+def _item_tagger_tags(item: dict[str, Any], *, limit: int = 12) -> list[str]:
+    values = item.get("tagger_tags")
+    if not isinstance(values, list):
+        integrated = item.get("integrated_visual")
+        integrated = integrated if isinstance(integrated, dict) else {}
+        values = integrated.get("tagger_tags")
+    if not isinstance(values, list):
+        return []
+    tags: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        tag = _text(value).replace("\r", " ").replace("\n", " ").strip()
+        key = tag.casefold()
+        if not tag or key in seen:
+            continue
+        seen.add(key)
+        tags.append(_truncate(tag, 80))
+        if len(tags) >= max(1, int(limit)):
+            break
+    return tags
 
 
 def _item_temporal_understanding(item: dict[str, Any]) -> dict[str, Any]:

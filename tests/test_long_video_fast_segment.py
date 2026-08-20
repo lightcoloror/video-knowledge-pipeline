@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import subprocess
 import time
 from pathlib import Path
@@ -114,6 +115,81 @@ def test_plan_combines_vad_transcript_visual_and_repeat_evidence(tmp_path: Path)
     row = next(row for row in audit["rows"] if row["key"] == "mcp_long_video_fast_segment_plan_args")
     assert row["tool"] == "long_video_fast_segment_plan"
     assert row["ok"] is True
+
+
+def test_plan_includes_hash_bound_vad_activity_blind_spots_as_review_only(
+    tmp_path: Path,
+) -> None:
+    bundle, media = _bundle(tmp_path)
+    vad = bundle / "silero-vad-candidate.json"
+    activity_audit = bundle / "asr-vad-activity-audit.json"
+    write_json(
+        activity_audit,
+        {
+            "schema": "video_knowledge_pipeline.asr_vad_activity_audit.v1",
+            "status": "review_required",
+            "source_media": {
+                "path": str(media),
+                "sha256": hashlib.sha256(media.read_bytes()).hexdigest(),
+            },
+            "vad_sha256": hashlib.sha256(vad.read_bytes()).hexdigest(),
+            "candidate_gap_count": 1,
+            "candidate_gaps": [
+                {
+                    "candidate_id": "audio-activity-gap-0001",
+                    "start": 40.0,
+                    "end": 50.0,
+                    "candidate_only": True,
+                    "reason": "non_silent_audio_without_vad_coverage",
+                }
+            ],
+        },
+    )
+
+    result = build_long_video_fast_segment_plan(
+        bundle,
+        activity_audit_path=activity_audit,
+        write=False,
+    )
+
+    candidate = next(
+        row
+        for row in result["segments"]
+        if "activity-audit:audio-activity-gap-0001" in row["evidence_ids"]
+    )
+    assert candidate["start"] <= 40.0
+    assert candidate["end"] >= 50.0
+    assert candidate["classification"] == "drop_review_required"
+    assert candidate["human_confirmation_required"] is True
+    assert candidate["activity_audit_status"] == "non_silent_audio_without_vad_coverage"
+    assert result["evidence"]["activity_audit"]["sha256"] == hashlib.sha256(
+        activity_audit.read_bytes()
+    ).hexdigest()
+    assert result["operator_boundary"]["activity_audit_candidate_only"] is True
+
+
+def test_plan_rejects_activity_audit_bound_to_other_media(tmp_path: Path) -> None:
+    bundle, _media = _bundle(tmp_path)
+    vad = bundle / "silero-vad-candidate.json"
+    activity_audit = bundle / "asr-vad-activity-audit.json"
+    write_json(
+        activity_audit,
+        {
+            "schema": "video_knowledge_pipeline.asr_vad_activity_audit.v1",
+            "status": "review_required",
+            "source_media": {"sha256": "0" * 64},
+            "vad_sha256": hashlib.sha256(vad.read_bytes()).hexdigest(),
+            "candidate_gap_count": 0,
+            "candidate_gaps": [],
+        },
+    )
+
+    with pytest.raises(ValueError, match="source media does not match"):
+        build_long_video_fast_segment_plan(
+            bundle,
+            activity_audit_path=activity_audit,
+            write=False,
+        )
 
 
 def test_apply_requires_explicit_complete_review_and_preserves_speaker_turns(tmp_path: Path) -> None:

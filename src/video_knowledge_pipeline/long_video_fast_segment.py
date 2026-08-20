@@ -10,6 +10,7 @@ from typing import Any, Iterable
 import jsonschema
 
 from .artifact_freshness import build_dependency_snapshot, validate_dependency_snapshot
+from .asr_vad_activity_audit import SCHEMA as ACTIVITY_AUDIT_SCHEMA
 from .canonical_json import canonical_json_sha256
 from .file_hash import sha256_file
 from .local_media_contracts import build_ffmpeg_execution_receipt
@@ -56,6 +57,7 @@ def build_long_video_fast_segment_plan(
     media_path: str | Path | None = None,
     transcript_path: str | Path | None = None,
     vad_path: str | Path | None = None,
+    activity_audit_path: str | Path | None = None,
     profile: str = "auto",
     long_silence_seconds: float = 4.0,
     edge_blank_seconds: float = 8.0,
@@ -85,6 +87,17 @@ def build_long_video_fast_segment_plan(
         raise ValueError("a timestamped transcript is required for safe long-video segmentation")
     vad = _resolve_optional(root, vad_path, _manifest_value(manifest, "silero_vad_candidate", "asr_vad_json"))
     vad_payload = _read_object(vad, "VAD evidence") if vad else {}
+    activity_audit = _resolve_activity_audit(
+        root,
+        manifest,
+        explicit=activity_audit_path,
+        vad_path=vad,
+    )
+    activity_payload = (
+        _validated_activity_audit(activity_audit, media_path=media, vad_path=vad)
+        if activity_audit
+        else {}
+    )
     timeline_path = root / "timeline.json"
     timeline = read_json(timeline_path) if timeline_path.is_file() else []
     timeline_rows = [row for row in timeline if isinstance(row, dict)] if isinstance(timeline, list) else []
@@ -113,6 +126,7 @@ def build_long_video_fast_segment_plan(
     )
     candidates.extend(_idle_candidates(cues, profile=parameters["profile"]))
     candidates.extend(_repeat_candidates(cues, similarity=parameters["repeat_similarity"]))
+    candidates.extend(_apply_activity_audit_evidence(candidates, activity_payload))
     candidates = _deduplicate_candidates(candidates, duration=duration)
     for index, row in enumerate(candidates, start=1):
         row["candidate_id"] = f"long-video-drop-{index:05d}"
@@ -134,6 +148,8 @@ def build_long_video_fast_segment_plan(
         inputs.append({"role": "transcript", "path": transcript})
     if vad and vad.is_relative_to(root):
         inputs.append({"role": "vad", "path": vad})
+    if activity_audit and activity_audit.is_relative_to(root):
+        inputs.append({"role": "activity_audit", "path": activity_audit})
     if timeline_path.is_file():
         inputs.append({"role": "timeline", "path": timeline_path})
     shot_path = Path(str(shot_provenance.get("path") or ""))
@@ -157,6 +173,7 @@ def build_long_video_fast_segment_plan(
         "evidence": {
             "transcript": _artifact(transcript),
             "vad": _artifact(vad) if vad else None,
+            "activity_audit": _artifact(activity_audit) if activity_audit else None,
             "timeline": _artifact(timeline_path) if timeline_path.is_file() else None,
             "technical_shots": shot_provenance,
         },
@@ -179,6 +196,7 @@ def build_long_video_fast_segment_plan(
             "source_media_modified": False,
             "automatic_publish": False,
             "external_provider_called": False,
+            "activity_audit_candidate_only": True,
         },
         "artifacts": {
             "plan_json": str(root / PLAN_PATH),
@@ -203,6 +221,7 @@ def build_long_video_fast_segment_plan(
                     "media_path": str(media),
                     "transcript_path": str(transcript),
                     "vad_path": str(vad or ""),
+                    "activity_audit_path": str(activity_audit or ""),
                     **parameters,
                     "write": True,
                 },
@@ -549,6 +568,95 @@ def _repeat_candidates(cues: list[TranscriptCue], *, similarity: float) -> list[
 
 def _candidate(start: float, end: float, kind: str, classification: str, reason: str, evidence_ids: list[str], *, excerpt: str = "") -> dict[str, Any]:
     return {"candidate_id": "", "start": round(max(0.0, start), 6), "end": round(max(start, end), 6), "kind": kind, "classification": classification, "recommended_action": "review_for_drop", "reason": reason, "evidence_ids": [value for value in evidence_ids if value], "transcript_excerpt": excerpt, "confidence": "high" if classification == "drop_safe_candidate" else "medium", "human_confirmation_required": True}
+
+
+def _apply_activity_audit_evidence(
+    candidates: list[dict[str, Any]],
+    payload: dict[str, Any],
+) -> list[dict[str, Any]]:
+    additions: list[dict[str, Any]] = []
+    for position, gap in enumerate(payload.get("candidate_gaps") or [], start=1):
+        if not isinstance(gap, dict):
+            raise ValueError("ASR VAD activity audit candidate gap must be an object")
+        start = float(gap.get("start") or 0.0)
+        end = float(gap.get("end") or 0.0)
+        if start < 0 or end <= start:
+            raise ValueError("ASR VAD activity audit candidate gap has invalid bounds")
+        candidate_id = str(gap.get("candidate_id") or f"audio-activity-gap-{position:04d}")
+        evidence_id = f"activity-audit:{candidate_id}"
+        overlapping = [
+            row
+            for row in candidates
+            if min(float(row["end"]), end) > max(float(row["start"]), start)
+        ]
+        if overlapping:
+            for row in overlapping:
+                row["classification"] = "drop_review_required"
+                row["confidence"] = "medium"
+                row["activity_audit_status"] = "non_silent_audio_without_vad_coverage"
+                row["evidence_ids"] = list(dict.fromkeys([*row.get("evidence_ids", []), evidence_id]))
+                row["reason"] = (
+                    str(row.get("reason") or "")
+                    + "; non-silent audio exists without speech-VAD coverage; music/noise is possible"
+                ).lstrip("; ")
+            continue
+        row = _candidate(
+            start,
+            end,
+            "audio_activity_without_vad",
+            "drop_review_required",
+            "non-silent audio exists without speech-VAD coverage; music/noise is possible",
+            [evidence_id],
+        )
+        row["activity_audit_status"] = "non_silent_audio_without_vad_coverage"
+        additions.append(row)
+    return additions
+
+
+def _resolve_activity_audit(
+    root: Path,
+    manifest: dict[str, Any],
+    *,
+    explicit: str | Path | None,
+    vad_path: Path | None,
+) -> Path | None:
+    discovered = _manifest_value(
+        manifest,
+        "asr_vad_activity_audit_json",
+        "asr_vad_activity_audit",
+    )
+    if explicit not in (None, "") or discovered not in (None, ""):
+        return _resolve_optional(root, explicit, discovered)
+    if vad_path:
+        adjacent = vad_path.with_name("asr-vad-activity-audit.json")
+        if adjacent.is_file():
+            return adjacent.resolve()
+    return None
+
+
+def _validated_activity_audit(
+    path: Path,
+    *,
+    media_path: Path,
+    vad_path: Path | None,
+) -> dict[str, Any]:
+    if vad_path is None:
+        raise ValueError("ASR VAD activity audit requires VAD evidence")
+    payload = _read_object(path, "ASR VAD activity audit")
+    if payload.get("schema") != ACTIVITY_AUDIT_SCHEMA:
+        raise ValueError("unsupported ASR VAD activity audit schema")
+    if payload.get("status") not in {"passed", "review_required"}:
+        raise ValueError("ASR VAD activity audit is not complete")
+    source = payload.get("source_media")
+    source = source if isinstance(source, dict) else {}
+    if str(source.get("sha256") or "") != sha256_file(media_path):
+        raise ValueError("ASR VAD activity audit source media does not match")
+    if str(payload.get("vad_sha256") or "") != sha256_file(vad_path):
+        raise ValueError("ASR VAD activity audit VAD evidence does not match")
+    gaps = payload.get("candidate_gaps")
+    if not isinstance(gaps, list):
+        raise ValueError("ASR VAD activity audit candidate_gaps must be an array")
+    return payload
 
 
 def _deduplicate_candidates(rows: list[dict[str, Any]], *, duration: float) -> list[dict[str, Any]]:

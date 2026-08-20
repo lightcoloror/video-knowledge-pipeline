@@ -1613,6 +1613,7 @@ def main(argv: list[str] | None = None) -> int:
             media_path=args.media_path or None,
             transcript_path=args.transcript_path or None,
             vad_path=args.vad_path or None,
+            activity_audit_path=args.activity_audit_path or None,
             profile=args.profile,
             long_silence_seconds=args.long_silence_seconds,
             edge_blank_seconds=args.edge_blank_seconds,
@@ -4372,6 +4373,7 @@ def build_parser() -> argparse.ArgumentParser:
     long_video_plan.add_argument("--media-path", default="")
     long_video_plan.add_argument("--transcript-path", default="")
     long_video_plan.add_argument("--vad-path", default="")
+    long_video_plan.add_argument("--activity-audit-path", default="")
     long_video_plan.add_argument("--profile", choices=["auto", "lecture", "interview", "meeting", "tutorial", "vlog"], default="auto")
     long_video_plan.add_argument("--long-silence-seconds", type=float, default=4.0)
     long_video_plan.add_argument("--edge-blank-seconds", type=float, default=8.0)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -651,8 +652,20 @@ def _run_tesseract_cli_candidates(
             results.append(result)
             continue
         command = [cmd, str(image_path), "stdout", "-l", language]
+        process_env = dict(os.environ)
+        tessdata_prefix = str(tesseract.get("tessdata_prefix") or "").strip()
+        if tessdata_prefix:
+            process_env["TESSDATA_PREFIX"] = tessdata_prefix
         try:
-            completed = subprocess.run(command, text=True, encoding="utf-8", errors="replace", capture_output=True, check=False)
+            completed = subprocess.run(
+                command,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                capture_output=True,
+                check=False,
+                env=process_env,
+            )
         except Exception as exc:  # pragma: no cover - depends on optional local OCR stack
             result["stderr"] = str(exc)
             results.append(result)

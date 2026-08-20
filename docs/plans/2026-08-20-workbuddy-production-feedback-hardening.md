@@ -118,3 +118,41 @@
 - Evidence: E2E receipt `codex-test-48988-b57f13b6a54f45f8b5f3ece34c7ef56e`; focused combined receipt `codex-test-54880-858b898f500242d9943ce025bc75d9e8`; associated 73-test receipt above.
 - Effective scope: synthetic regression coverage only; no real media, provider, model, service, or account is touched.
 - Rollback: remove the new E2E test with the scoped commit; production export behavior is unchanged by this item.
+
+## 2026-08-20 18:24:00 | Codex（GPT-5.6 Sol）| Feedback Closure Record
+
+### Capability-aware Tesseract installation selection
+
+- Intent: make multilingual OCR select a Tesseract executable and language-data directory that jointly satisfy the requested languages.
+- Decision: score discovered executable/tessdata pairs, prefer complete adjacent installs, preserve strict explicit overrides, and bind the selected directory through `TESSDATA_PREFIX` for the OCR child process.
+- Reason: executable discovery alone selected a TRAE installation containing only `chi_sim`, even though the PDF24 installation contained both `chi_sim` and `eng`.
+- Evidence: focused red receipt `codex-test-10816-7c516a191ece43a884636db936908d62`; focused green `codex-test-64656-11862020b8af4670aa452edbea7df536`; live read-only resolution selected the PDF24 executable and its `chi_sim+eng` tessdata.
+- Effective scope: Tesseract capability reporting and direct CLI OCR environment only; no package installation, OCR model download, media processing, or fallback provider call.
+- Rollback: revert the closure commit; explicit `LECTURE_TESSERACT_CMD` and `LECTURE_TESSDATA_PREFIX` remain the operator override contract.
+
+### RAM++ evidence in the final reader note
+
+- Intent: preserve already-imported RAM++ visual evidence in the final reader artifact.
+- Decision: project at most 12 deduplicated labels into transcript/visual note sections under the explicit label `RAM++ 候选标签（未人工确认）`.
+- Reason: the canonical timeline retained tagger evidence, but the final knowledge note omitted it and therefore hid useful non-text visual context.
+- Evidence: synthetic OCR-to-note E2E now asserts candidate-label visibility and deduplication; associated receipt `codex-test-5396-019e612dac7e41389d8d3423f2aa65e0` passed 54 tests.
+- Effective scope: reader projection only; candidate labels are not promoted into facts, summaries, chapters, or human-confirmed evidence.
+- Rollback: revert the closure commit; canonical timeline tagger annotations remain unchanged.
+
+### ASR/VAD activity audit in long-video segmentation
+
+- Intent: prevent non-silent audio outside speech-VAD coverage from being treated as safe removable silence.
+- Decision: consume only completed, source-media/VAD-hash-bound activity audits; downgrade overlapping drop candidates to review-required and add uncovered gaps as review-only `audio_activity_without_vad` candidates.
+- Reason: silence/VAD evidence alone can miss music, noise, laughter, or weak speech; such regions require human review before editing.
+- Evidence: synthetic tests cover exact hash binding, review-only classification, dependency evidence, and rejection of stale other-media audits; focused and associated receipts above passed.
+- Effective scope: plan generation and its CLI/MCP argument receipt only; source media is never changed and activity evidence cannot authorize automatic deletion.
+- Rollback: omit `--activity-audit-path` or revert the closure commit; existing plans remain content-addressed by their dependency snapshots.
+
+### Local model location audit
+
+- Intent: distinguish models currently used by VKP from optional assets, incomplete duplicates, and provider-managed stores.
+- Decision: use existing status functions, SOURCE_INVENTORY, sanitized config status, and filesystem metadata only; do not load models or probe provider endpoints.
+- Reason: directory presence is insufficient evidence of snapshot completeness or runnable dependencies.
+- Evidence: local audit `VKP-local-model-location-audit-20260820.md`; primary FunASR/RAM++ and Qwen ASR snapshots passed readiness checks, while Forced Aligner, Silero, neural shot checkpoints, and sherpa models remained explicitly unavailable/unconfigured.
+- Effective scope: read-only owner evidence; no project config, provider state, model file, service, GPU, or network state changed.
+- Rollback: delete the owner audit document; no runtime rollback is required.
