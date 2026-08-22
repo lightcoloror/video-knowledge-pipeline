@@ -47,14 +47,16 @@ def render_final_reading_note(
     *,
     smart_summary_markdown: str,
     transcript_markdown: str,
+    full_body_markdown: str = "",
     timeline: list[dict[str, Any]],
     content_type: str = "视频整理",
     participant_count: int = 0,
 ) -> str:
     """Render the single reader-facing document as a Logseq block tree.
 
-    Intent: make the combined Smart Summary + transcript artifact directly
-    consumable by Logseq while retaining the GetBrain reader hierarchy.
+    Intent: make the combined Smart Summary + continuous body + transcript
+    artifact directly consumable by Logseq while retaining the GetBrain reader
+    hierarchy.
     Decision: reuse the local getnote-logseq-sync convention: every semantic
     node is a ``- `` block, each child adds two spaces, transcript entries use
     a speaker/time parent and a text child, no default ``collapsed::`` property,
@@ -67,7 +69,7 @@ def render_final_reading_note(
     ``check_logseq_file_format.py`` preflight.
     Effective scope: final reader Markdown only; canonical summary/evidence,
     transcript JSON, timestamps, speaker attribution and quality gates are not
-    changed.
+    changed. The body is a presentation-only projection of the same transcript.
     """
 
     duration = max((float(item.get("end") or 0.0) for item in timeline), default=0.0)
@@ -85,6 +87,7 @@ def render_final_reading_note(
         summary_sections: list[tuple[str, str]] = []
     else:
         summary_overview, summary_sections = _reader_summary_components(raw_summary)
+    full_body = _reading_body(full_body_markdown)
     transcript = _reading_body(transcript_markdown)
     lines = [
         "- 摘要",
@@ -100,6 +103,13 @@ def render_final_reading_note(
     for section_title, section_content in summary_sections:
         lines.append(f"    - {section_title}")
         lines.extend(_markdown_fragment_to_logseq_blocks(section_content, base_level=3))
+    lines.append("- 正文")
+    lines.extend(
+        _markdown_fragment_to_logseq_blocks(
+            full_body or "（暂无正文。）",
+            base_level=1,
+        )
+    )
     lines.append("- 逐字稿")
     lines.extend(_transcript_to_logseq_blocks(transcript, base_level=1))
     return "\n".join(lines).rstrip() + "\n"

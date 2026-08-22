@@ -722,6 +722,7 @@ def test_semantic_closure_refresh_exports_updates_readable_outputs(tmp_path: Pat
     closure = transcript_semantic_correction_closure(root, input_json=result_path, refresh_exports=True, write=True)
 
     full_transcript = (root / "exports" / "full-transcript.md").read_text(encoding="utf-8")
+    full_body = (root / "exports" / "full-body.md").read_text(encoding="utf-8")
     smart_summary_input = _smart_summary_input_text(root)
     closure_report = (root / "transcript-semantic-correction-closure.md").read_text(encoding="utf-8")
     readable_impact = read_json(root / "transcript-semantic-readable-impact-report.json")
@@ -736,6 +737,9 @@ def test_semantic_closure_refresh_exports_updates_readable_outputs(tmp_path: Pat
     assert readable_impact["status"] == "passed"
     assert "Playwright MCP" in full_transcript
     assert "play right m c p" not in full_transcript
+    assert "Playwright MCP" in full_body
+    assert "play right m c p" not in full_body
+    assert "00:00:" not in full_body
     assert "Playwright MCP" in smart_summary_input
     assert "play right m c p" not in smart_summary_input
     assert "Refresh exports status: `refreshed`" in closure_report

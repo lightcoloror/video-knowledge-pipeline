@@ -23,6 +23,7 @@ def _write_bundle(root: Path) -> None:
             "smart_summary_chapters_markdown": "exports/smart-summary-chapters.md",
             "smart_summary_course_map_markdown": "exports/course-map.md",
             "knowledge_note_smart_summary_markdown": "exports/smart-summary.md",
+            "knowledge_note_full_body_markdown": "exports/full-body.md",
             "knowledge_note_transcript_markdown": "exports/full-transcript.md",
             "transcript_source_arbitration_json": "transcript-source-arbitration.json",
             "transcript_source_arbitration_markdown": "transcript-source-arbitration.md",
@@ -428,6 +429,7 @@ def _write_bundle(root: Path) -> None:
         "exports/smart-summary-input-pack.md": "# Smart Summary Input Pack\n",
         "exports/smart-summary-chapters.md": "# Smart Summary Chapters\n",
         "exports/course-map.md": "# Course Map\n",
+        "exports/full-body.md": "# Full Body\n",
         "exports/full-transcript.md": "# Transcript\n",
     }.items():
         path = root / rel
@@ -622,6 +624,7 @@ def test_export_video_workbench_writes_static_workspace() -> None:
     assert chapter["child_memory_ids"] == ["M0001", "M0002"]
     assert chapter["child_moment_indexes"] == [1, 2]
     artifact_keys = {row["key"] for row in payload["artifacts"]}
+    assert "knowledge_note_full_body_markdown" in artifact_keys
     assert "smart_summary_input_pack_markdown" in artifact_keys
     assert "smart_summary_chapters_markdown" in artifact_keys
     assert "smart_summary_course_map_markdown" in artifact_keys
@@ -801,6 +804,7 @@ def test_task_console_links_video_workbench() -> None:
     artifact_keys = {row["key"] for row in result["artifacts"]}
     command_keys = {row["key"] for row in result["commands"]}
     assert "video_workbench_html" in artifact_keys
+    assert "knowledge_note_full_body_markdown" in artifact_keys
     assert "video_workbench" in command_keys
 
     html = (bundle / "task-console.html").read_text(encoding="utf-8")

@@ -73,6 +73,7 @@ def export_knowledge_note(
     out_dir = Path(output_dir).expanduser().resolve() if output_dir else root / "exports"
     note_path = out_dir / "knowledge-note.md"
     transcript_path = out_dir / "full-transcript.md"
+    full_body_path = out_dir / "full-body.md"
     smart_summary_path = out_dir / "smart-summary.md"
     smart_summary_prompt_path = out_dir / "smart-summary-codex-prompt.md"
     audit_path = out_dir / "extraction-audit.md"
@@ -109,6 +110,13 @@ def export_knowledge_note(
         }
     note_markdown = ""
     transcript_markdown = _render_full_transcript(note_title, timeline, bundle_dir=root, manifest=manifest, sidecar=transcript_sidecar, transcript_quality_gate=transcript_quality_gate)
+    full_body_markdown = _render_full_body(
+        note_title,
+        timeline,
+        bundle_dir=root,
+        manifest=manifest,
+        sidecar=transcript_sidecar,
+    )
     smart_summary_input_pack = build_smart_summary_input_pack(root, title=note_title, write=write)
     long_video_memory_pack = build_long_video_memory_pack(root, write=write)
     smart_summary_prompt_markdown = _render_smart_summary_codex_prompt(note_title, root, manifest, readable_timeline, summary, transcript_sidecar, smart_summary_input_pack)
@@ -135,6 +143,7 @@ def export_knowledge_note(
     note_markdown = render_final_reading_note(
         note_title,
         smart_summary_markdown=smart_summary_markdown,
+        full_body_markdown=full_body_markdown,
         transcript_markdown=transcript_markdown,
         timeline=readable_timeline,
         content_type=_reader_content_type(manifest),
@@ -148,6 +157,7 @@ def export_knowledge_note(
     content_assets = _content_assets_index(
         note_path=note_path,
         transcript_path=transcript_path,
+        full_body_path=full_body_path,
         smart_summary_path=smart_summary_path,
         smart_summary_prompt_path=smart_summary_prompt_path,
         audit_path=audit_path,
@@ -184,6 +194,7 @@ def export_knowledge_note(
         "output_dir": str(out_dir),
         "note_path": str(note_path),
         "full_transcript_path": str(transcript_path),
+        "full_body_path": str(full_body_path),
         "smart_summary_path": str(smart_summary_path),
         "smart_summary_prompt_path": str(smart_summary_prompt_path),
         "smart_summary_input_pack_path": str(out_dir / "smart-summary-input-pack.md"),
@@ -215,6 +226,7 @@ def export_knowledge_note(
             out_dir.mkdir(parents=True, exist_ok=True)
             note_path.write_text(note_markdown, encoding="utf-8")
             transcript_path.write_text(transcript_markdown, encoding="utf-8")
+            full_body_path.write_text(full_body_markdown, encoding="utf-8")
             smart_summary_path.write_text(smart_summary_markdown, encoding="utf-8")
             smart_summary_prompt_path.write_text(smart_summary_prompt_markdown, encoding="utf-8")
             audit_path.write_text(audit_markdown, encoding="utf-8")
@@ -238,6 +250,7 @@ def export_knowledge_note(
             note_markdown = render_final_reading_note(
                 note_title,
                 smart_summary_markdown=smart_summary_markdown,
+                full_body_markdown=full_body_markdown,
                 transcript_markdown=transcript_markdown,
                 timeline=readable_timeline,
                 content_type=_reader_content_type(manifest),
@@ -260,6 +273,7 @@ def export_knowledge_note(
                 build_reader_export_receipt(
                     canonical_transcript=_canonical_transcript_path(root, manifest),
                     full_transcript=transcript_path,
+                    full_body=full_body_path,
                     reading_note=note_path,
                 ),
             )
@@ -288,6 +302,7 @@ def export_knowledge_note(
                 "exported_at": result["exported_at"],
                 "note_path": str(note_path),
                 "full_transcript_path": str(transcript_path),
+                "full_body_path": str(full_body_path),
                 "smart_summary_path": str(smart_summary_path),
                 "smart_summary_prompt_path": str(smart_summary_prompt_path),
                 "smart_summary_input_pack_path": str(out_dir / "smart-summary-input-pack.md"),
@@ -338,6 +353,7 @@ def export_knowledge_note(
             manifest["content_candidate_pack_markdown"] = "exports/content-candidate-pack.md"
             manifest["knowledge_note_markdown"] = str(note_path)
             manifest["knowledge_note_transcript_markdown"] = str(transcript_path)
+            manifest["knowledge_note_full_body_markdown"] = str(full_body_path)
             manifest["knowledge_note_smart_summary_markdown"] = str(smart_summary_path)
             manifest["knowledge_note_smart_summary_codex_prompt_markdown"] = str(smart_summary_prompt_path)
             manifest["knowledge_note_smart_summary_input_pack_markdown"] = str(out_dir / "smart-summary-input-pack.md")
@@ -501,6 +517,7 @@ def _register_export_run(root: Path, result: dict[str, Any], *, write: bool) -> 
     artifacts = [
         {"key": "knowledge_note", "path": result.get("note_path", "")},
         {"key": "full_transcript", "path": result.get("full_transcript_path", "")},
+        {"key": "full_body", "path": result.get("full_body_path", "")},
         {"key": "smart_summary", "path": result.get("smart_summary_path", "")},
         {"key": "smart_summary_prompt", "path": result.get("smart_summary_prompt_path", "")},
         {"key": "smart_summary_input_pack", "path": result.get("smart_summary_input_pack_path", "")},
@@ -601,6 +618,7 @@ def _content_assets_index(
     *,
     note_path: Path,
     transcript_path: Path,
+    full_body_path: Path,
     smart_summary_path: Path,
     smart_summary_prompt_path: Path,
     audit_path: Path,
@@ -617,6 +635,7 @@ def _content_assets_index(
         "smart_summary_path": str(smart_summary_path),
         "smart_summary_prompt_path": str(smart_summary_prompt_path),
         "timeline_path": str(transcript_path),
+        "full_body_path": str(full_body_path),
         "audit_path": str(audit_path),
         "key_segments_path": str(key_segments_path),
         "short_video_script_drafts_path": str(short_video_scripts_path),
@@ -1587,6 +1606,78 @@ def _render_full_transcript(
     return "\n".join(lines).rstrip() + "\n"
 
 
+def _render_full_body(
+    title: str,
+    timeline: list[dict[str, Any]],
+    *,
+    bundle_dir: Path | None = None,
+    manifest: dict[str, Any] | None = None,
+    sidecar: dict[str, Any] | None = None,
+) -> str:
+    """Render a continuous, verbatim reading projection of transcript cues.
+
+    Intent: provide a reader-facing full body in addition to the timestamped
+    transcript and Smart Summary.
+    Decision: reuse the same transcript source selection as the full transcript,
+    remove cue metadata, and only aggregate whitespace-delimited paragraphs.
+    Reason: a second LLM rewrite would risk omissions and factual drift.
+    Evidence: the A option approved for the 2026-08-22 continuous-body design.
+    Effective scope: presentation only; source transcript files and cue content
+    are never modified.
+    """
+
+    completeness = transcript_completeness_status(bundle_dir) if bundle_dir else {"passed": True}
+    cues: list[Any] = []
+    source_path = _full_transcript_source_path(bundle_dir, manifest or {}, sidecar or {}) if bundle_dir else None
+    if source_path:
+        try:
+            cues = parse_transcript(source_path)
+        except Exception:
+            cues = []
+    if not cues:
+        cues = _timeline_cues(timeline)
+    lines = [f"# {title} - 正文", ""]
+    if not completeness.get("passed"):
+        lines.extend(
+            [
+                "> ⚠️ 状态：`review-required`。这是机器逐字稿的连续阅读版，不是人工校对或发布批准版本；转录质量门未通过。",
+                f"> 阻断原因：`transcript_quality:{completeness.get('status')}`。",
+                "",
+            ]
+        )
+    lines.extend(_continuous_body_lines_from_cues(cues))
+    return "\n\n".join(line for line in lines if line != "").rstrip() + "\n"
+
+
+def _continuous_body_lines_from_cues(
+    cues: list[Any],
+    *,
+    target_chars: int = 600,
+) -> list[str]:
+    """Merge cue text into paragraphs without rewriting or reordering it."""
+
+    paragraphs: list[str] = []
+    current: list[str] = []
+    current_chars = 0
+    previous: tuple[str, str] | None = None
+    threshold = max(1, int(target_chars))
+    for cue in cues:
+        text = _text(getattr(cue, "text", ""))
+        identity = (cue_speaker(cue), text)
+        if not text or identity == previous:
+            continue
+        previous = identity
+        current.append(text)
+        current_chars += len(text) + (1 if len(current) > 1 else 0)
+        if current_chars >= threshold:
+            paragraphs.append(" ".join(current))
+            current = []
+            current_chars = 0
+    if current:
+        paragraphs.append(" ".join(current))
+    return paragraphs or ["（无可用正文。）"]
+
+
 def _artifact_review_watermark(text: str, *, artifact_label: str, gate: dict[str, Any]) -> str:
     marker = "> ⚠️ 状态：`review-required`。"
     if marker in text:
@@ -1715,10 +1806,12 @@ def canonical_export_integrity_status(bundle_dir: str | Path) -> dict[str, Any]:
         }
     canonical_hash = _file_sha256(canonical)
     full_path = root / "exports" / "full-transcript.md"
+    full_body_path = root / "exports" / "full-body.md"
     knowledge_note_path = root / "exports" / "knowledge-note.md"
     pack_path = root / "exports" / "smart-summary-input-pack.json"
     receipt_path = root / "exports" / "reader-export-receipt.json"
     full_text = full_path.read_text(encoding="utf-8-sig") if full_path.exists() else ""
+    full_body_text = full_body_path.read_text(encoding="utf-8-sig") if full_body_path.exists() else ""
     knowledge_note_text = knowledge_note_path.read_text(encoding="utf-8-sig") if knowledge_note_path.exists() else ""
     pack = read_json(pack_path) if pack_path.exists() else {}
     receipt = read_json(receipt_path) if receipt_path.exists() else {}
@@ -1728,11 +1821,13 @@ def canonical_export_integrity_status(bundle_dir: str | Path) -> dict[str, Any]:
         receipt = {}
     receipt_matches = (
         full_path.exists()
+        and full_body_path.exists()
         and knowledge_note_path.exists()
         and receipt_matches_reader_files(
             receipt,
             canonical_transcript=canonical,
             full_transcript=full_path,
+            full_body=full_body_path,
             reading_note=knowledge_note_path,
         )
     )
@@ -1740,12 +1835,17 @@ def canonical_export_integrity_status(bundle_dir: str | Path) -> dict[str, Any]:
     match = re.search(r"Canonical source SHA-256: `([0-9a-f]{64})`", full_text)
     if match:
         full_header_hash = match.group(1)
+    full_body_header_hash = ""
+    body_match = re.search(r"Canonical source SHA-256: `([0-9a-f]{64})`", full_body_text)
+    if body_match:
+        full_body_header_hash = body_match.group(1)
     knowledge_note_hash = ""
     note_match = re.search(r"Canonical transcript SHA-256: `([0-9a-f]{64})`", knowledge_note_text)
     if note_match:
         knowledge_note_hash = note_match.group(1)
     if receipt_matches:
         full_header_hash = canonical_hash
+        full_body_header_hash = canonical_hash
         knowledge_note_hash = canonical_hash
     pack_source = Path(str(pack.get("transcript_source") or "")) if pack else Path()
     if pack_source and not pack_source.is_absolute():
@@ -1759,6 +1859,10 @@ def canonical_export_integrity_status(bundle_dir: str | Path) -> dict[str, Any]:
         issues.append({"key": "full_transcript_missing", "detail": str(full_path)})
     elif full_header_hash != canonical_hash:
         issues.append({"key": "full_transcript_canonical_hash_mismatch", "detail": full_header_hash})
+    if not full_body_path.exists():
+        issues.append({"key": "full_body_missing", "detail": str(full_body_path)})
+    elif full_body_header_hash != canonical_hash:
+        issues.append({"key": "full_body_canonical_hash_mismatch", "detail": full_body_header_hash})
     if not knowledge_note_path.exists():
         issues.append({"key": "knowledge_note_missing", "detail": str(knowledge_note_path)})
     elif knowledge_note_hash != canonical_hash:
@@ -1781,6 +1885,8 @@ def canonical_export_integrity_status(bundle_dir: str | Path) -> dict[str, Any]:
         "canonical_sha256": canonical_hash,
         "full_transcript_path": str(full_path),
         "full_transcript_sha256": _file_sha256(full_path) if full_path.exists() else "",
+        "full_body_path": str(full_body_path),
+        "full_body_sha256": _file_sha256(full_body_path) if full_body_path.exists() else "",
         "knowledge_note_path": str(knowledge_note_path),
         "knowledge_note_sha256": _file_sha256(knowledge_note_path) if knowledge_note_path.exists() else "",
         "smart_summary_input_pack_path": str(pack_path),

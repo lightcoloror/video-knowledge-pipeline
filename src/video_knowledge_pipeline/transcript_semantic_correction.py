@@ -574,6 +574,7 @@ FINAL_OUTPUT_CANDIDATES = [
     ("source_arbitrated_transcript_json", "source-arbitrated-transcript.json"),
     ("source_arbitrated_transcript_markdown", "source-arbitrated-transcript.md"),
     ("full_transcript", "exports/full-transcript.md"),
+    ("full_body", "exports/full-body.md"),
     ("smart_summary", "exports/smart-summary.md"),
     ("smart_summary_codex", "exports/smart-summary.codex.md"),
     ("content_candidate_pack", "exports/content-candidate-pack.json"),
@@ -2074,6 +2075,7 @@ def _refresh_semantic_correction_outputs(root: Path) -> dict[str, Any]:
         "status": "refreshed",
         "export_summary_path": export_result.get("summary_path"),
         "full_transcript_path": export_result.get("full_transcript_path"),
+        "full_body_path": export_result.get("full_body_path"),
         "smart_summary_path": export_result.get("smart_summary_path"),
         "impact_status": impact.get("status"),
         "readable_impact_status": readable_impact.get("status"),
@@ -2094,7 +2096,7 @@ def transcript_semantic_correction_impact_report(bundle_dir: str | Path, *, writ
     correction_rows = []
     final_residual_total = 0
     corrected_hit_total = 0
-    final_keys = {"source_arbitrated_transcript_json", "source_arbitrated_transcript_markdown", "full_transcript", "smart_summary", "smart_summary_codex", "content_candidate_pack", "content_material_card"}
+    final_keys = {"source_arbitrated_transcript_json", "source_arbitrated_transcript_markdown", "full_transcript", "full_body", "smart_summary", "smart_summary_codex", "content_candidate_pack", "content_material_card"}
     for row in accepted:
         original = str(row.get("original_text") or "").strip()
         corrected = str(row.get("corrected_text") or "").strip()
@@ -4772,6 +4774,7 @@ def _load_output_documents(root: Path, manifest: dict[str, Any]) -> list[dict[st
 def _load_readable_output_documents(root: Path, manifest: dict[str, Any]) -> list[dict[str, Any]]:
     specs = [
         ("full_transcript", manifest.get("knowledge_note_transcript_markdown") or manifest.get("full_transcript") or "exports/full-transcript.md", "required_readable_transcript"),
+        ("full_body", manifest.get("knowledge_note_full_body_markdown") or manifest.get("full_body") or "exports/full-body.md", "required_readable_transcript"),
         ("smart_summary", manifest.get("smart_summary") or "exports/smart-summary.md", "required_readable_summary"),
         ("knowledge_note", manifest.get("knowledge_note_markdown") or "exports/knowledge-note.md", "reported_audit_note"),
     ]
@@ -5527,6 +5530,7 @@ def _render_closure_markdown(result: dict[str, Any]) -> str:
             "## 导出刷新",
             "",
             f"- Full transcript: `{refresh.get('full_transcript_path', '')}`",
+            f"- Full body: `{refresh.get('full_body_path', '')}`",
             f"- Smart summary: `{refresh.get('smart_summary_path', '')}`",
             f"- Impact: `{refresh.get('impact_status', '')}`",
             f"- Readable impact: `{refresh.get('readable_impact_status', '')}`",

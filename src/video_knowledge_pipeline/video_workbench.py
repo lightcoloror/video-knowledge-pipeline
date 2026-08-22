@@ -455,6 +455,7 @@ def _artifact_cards(root: Path, manifest: dict[str, Any]) -> list[dict[str, Any]
         ("transcript_semantic_correction_readable_impact_markdown", "通用语义纠错可读文件影响", "transcript-semantic-readable-impact-report.md"),
         ("transcript_semantic_correction_status_markdown", "通用语义纠错状态", "transcript-semantic-correction-status.md"),
         ("knowledge_note_smart_summary_markdown", "智能总结", "exports/smart-summary.md"),
+        ("knowledge_note_full_body_markdown", "连续正文", "exports/full-body.md"),
         ("smart_summary_input_pack_markdown", "智能总结输入证据包", "exports/smart-summary-input-pack.md"),
         ("smart_summary_chapters_markdown", "智能总结章节证据包", "exports/smart-summary-chapters.md"),
         ("smart_summary_course_map_markdown", "课程地图", "exports/course-map.md"),

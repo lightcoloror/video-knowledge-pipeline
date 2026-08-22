@@ -130,6 +130,7 @@ def test_acceptance_check_keeps_export_fresh_when_refresh_rewrites_derived_cover
     assert report["summary"]["export_freshness"] == "fresh"
     assert report["note_quality"]["export_freshness"] == "fresh"
     assert report["note_quality"]["dependency_snapshot_validation"]["passed"] is True
+    assert Path(report["note_quality"]["full_body_path"]).exists()
     assert Path(report["note_quality"]["extraction_audit_path"]).exists()
 
 

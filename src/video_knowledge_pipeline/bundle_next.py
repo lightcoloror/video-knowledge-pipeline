@@ -886,6 +886,7 @@ def _compact_action_result(result: dict[str, Any] | None) -> dict[str, Any] | No
         "input_template_json",
         "note_path",
         "full_transcript_path",
+        "full_body_path",
         "mcp_args_path",
     ):
         if key in result:

@@ -592,6 +592,7 @@ def _compact_result(result: Any) -> dict[str, Any]:
         "preflight_json_path",
         "note_path",
         "full_transcript_path",
+        "full_body_path",
         "review_html",
         "plan_path",
         "knowledge_coverage",

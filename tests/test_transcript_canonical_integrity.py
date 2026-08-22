@@ -25,6 +25,10 @@ def test_canonical_export_integrity_blocks_stale_transcript_exports(tmp_path: Pa
         f"# 逐字稿\n\n- Canonical source SHA-256: `{canonical_hash}`\n",
         encoding="utf-8",
     )
+    (exports / "full-body.md").write_text(
+        f"# 正文\n\n- Canonical source SHA-256: `{canonical_hash}`\n",
+        encoding="utf-8",
+    )
     (exports / "knowledge-note.md").write_text(
         f"# 知识笔记\n\n> Canonical transcript SHA-256: `{canonical_hash}`\n",
         encoding="utf-8",
@@ -49,6 +53,7 @@ def test_canonical_export_integrity_blocks_stale_transcript_exports(tmp_path: Pa
     assert stale["passed"] is False
     assert {issue["key"] for issue in stale["issues"]} == {
         "full_transcript_canonical_hash_mismatch",
+        "full_body_canonical_hash_mismatch",
         "knowledge_note_canonical_hash_mismatch",
         "smart_summary_source_hash_mismatch",
     }

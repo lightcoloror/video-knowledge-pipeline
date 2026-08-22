@@ -1123,6 +1123,7 @@ def _artifact_links(root: Path, manifest: dict[str, Any]) -> list[dict[str, Any]
         ("bundle_status_report", "Bundle 状态"),
         ("knowledge_note_markdown", "知识笔记"),
         ("knowledge_note_smart_summary_markdown", "智能总结"),
+        ("knowledge_note_full_body_markdown", "连续正文"),
         ("knowledge_note_smart_summary_codex_prompt_markdown", "Codex总结提示"),
         ("smart_summary_llm_rewrite_pack_markdown", "LLM/Codex 改写包"),
         ("smart_summary_llm_rewrite_template_markdown", "LLM/Codex 改写模板"),

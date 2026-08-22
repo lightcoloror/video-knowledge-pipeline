@@ -613,6 +613,7 @@ def _note_quality(root: Path) -> dict[str, Any]:
     export_dir = root / "exports"
     note_path = export_dir / "knowledge-note.md"
     transcript_path = export_dir / "full-transcript.md"
+    full_body_path = export_dir / "full-body.md"
     audit_path = export_dir / "extraction-audit.md"
     # Watch source inputs only. Derived reports such as knowledge-coverage.json
     # are refreshed by acceptance-check itself and would otherwise make every
@@ -647,17 +648,23 @@ def _note_quality(root: Path) -> dict[str, Any]:
                 root,
                 snapshot_value if isinstance(snapshot_value, dict) else {},
             )
-    if not note_path.exists() or not transcript_path.exists() or not audit_path.exists():
+    if not note_path.exists() or not transcript_path.exists() or not full_body_path.exists() or not audit_path.exists():
         freshness = "missing"
     elif snapshot_validation.get("status") in {"fresh", "stale", "missing", "invalid"}:
         freshness = str(snapshot_validation["status"])
     else:
-        note_mtime = min(note_path.stat().st_mtime, transcript_path.stat().st_mtime, audit_path.stat().st_mtime)
+        note_mtime = min(
+            note_path.stat().st_mtime,
+            transcript_path.stat().st_mtime,
+            full_body_path.stat().st_mtime,
+            audit_path.stat().st_mtime,
+        )
         newest_input = max((path.stat().st_mtime for path in watched if path.exists()), default=0)
         freshness = "stale" if newest_input > note_mtime else "fresh"
     return {
         "knowledge_note_path": str(note_path),
         "full_transcript_path": str(transcript_path),
+        "full_body_path": str(full_body_path),
         "extraction_audit_path": str(audit_path),
         "export_freshness": freshness,
         "dependency_snapshot_path": str(snapshot_path),

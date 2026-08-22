@@ -149,6 +149,7 @@ def test_export_includes_source_channels_demo_notes_and_crop_audit(tmp_path: Pat
 
     note = Path(result["note_path"]).read_text(encoding="utf-8")
     transcript = Path(result["full_transcript_path"]).read_text(encoding="utf-8")
+    full_body = Path(result["full_body_path"]).read_text(encoding="utf-8")
     audit = Path(result["extraction_audit_path"]).read_text(encoding="utf-8")
     key_segments = Path(result["content_assets"]["key_segments_path"]).read_text(encoding="utf-8")
     summary = json.loads(Path(result["summary_path"]).read_text(encoding="utf-8"))
@@ -161,7 +162,11 @@ def test_export_includes_source_channels_demo_notes_and_crop_audit(tmp_path: Pat
     linked_chapter_markdown = (bundle / "exports" / "smart-summary-chapters.md").read_text(encoding="utf-8")
     assert "Linked Content Candidates" in linked_chapter_markdown
     assert "  - 📑 智能总结" in note
+    assert note.index("  - 📑 智能总结") < note.index("- 正文") < note.index("- 逐字稿")
     assert "- 逐字稿" in note
+    assert "老师讲软件界面。" in full_body
+    assert "00:00:" not in full_body
+    assert result["content_assets"]["full_body_path"] == result["full_body_path"]
     assert "#### 信息来源" not in note
     assert "#### 演示了什么" in transcript
     assert "展示保存按钮" in transcript
@@ -211,6 +216,8 @@ def test_export_includes_source_channels_demo_notes_and_crop_audit(tmp_path: Pat
     assert "证据引用 / Citation Digest" in candidate_pack_markdown
     assert "Citation Digest" in candidate_pack_markdown
     manifest = json.loads((bundle / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["knowledge_note_full_body_markdown"] == result["full_body_path"]
+    assert manifest["knowledge_note_export"]["full_body_path"] == result["full_body_path"]
     assert manifest["content_candidate_pack_json"] == "exports/content-candidate-pack.json"
     assert manifest["content_candidate_pack_markdown"] == "exports/content-candidate-pack.md"
     assert "关键片段候选" in key_segments
@@ -1702,6 +1709,7 @@ def test_export_and_input_pack_prefer_source_arbitrated_transcript(tmp_path: Pat
     result = export_knowledge_note(bundle, title="Source Arbitrated Priority")
 
     full_transcript = Path(result["full_transcript_path"]).read_text(encoding="utf-8")
+    full_body = Path(result["full_body_path"]).read_text(encoding="utf-8")
     smart_summary = Path(result["smart_summary_path"]).read_text(encoding="utf-8")
     export_summary = json.loads(Path(result["summary_path"]).read_text(encoding="utf-8"))
 
@@ -1711,6 +1719,10 @@ def test_export_and_input_pack_prefer_source_arbitrated_transcript(tmp_path: Pat
     assert "BrowserHarness" in full_transcript
     assert "playright m c p" not in full_transcript
     assert "brow harness" not in full_transcript
+    assert "Today we compare Playwright MCP and BrowserHarness." in full_body
+    assert "playright m c p" not in full_body
+    assert "brow harness" not in full_body
+    assert "00:00:" not in full_body
     assert "needs_llm_summary" in smart_summary
     assert export_summary["term_correction"]["accepted_term_count"] == 2
     accepted = {row["canonical_term"] for row in export_summary["term_correction"]["accepted_terms"]}
