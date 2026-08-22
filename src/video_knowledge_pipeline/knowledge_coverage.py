@@ -8,19 +8,13 @@ from .markdown_text import markdown_table_cell as _md_cell
 from .models import now_iso
 from .source_artifacts import summarize_manifest_source_artifacts
 from .storage import read_json, write_json
+from .visual_evidence import (
+    has_temporal_evidence as _shared_has_temporal_evidence,
+    has_visual_evidence as _shared_has_visual_evidence,
+    human_review_accepted as _shared_human_review_accepted,
+)
 
 COVERAGE_SCHEMA = "lecture_knowledge_coverage.v1"
-ACCEPTED_REVIEW_STATUSES = {
-    "accepted",
-    "reviewed",
-    "keep_image",
-    "accepted_known_gap",
-    "accepted_no_visual_content",
-    "accepted_provider_blocked",
-    "corrected_visual_text",
-    "corrected_visual_understanding",
-    "corrected_temporal_visual_understanding",
-}
 
 
 def audit_knowledge_coverage(
@@ -864,48 +858,15 @@ def _valid_visual_understanding(value: Any) -> bool:
 
 
 def _has_visual_understanding(item: dict[str, Any]) -> bool:
-    if _valid_visual_understanding(item.get("visual_understanding")):
-        return True
-    if _valid_visual_understanding(item.get("human_corrected_visual_understanding")):
-        return True
-    return _human_review_accepted(item)
-
-
-def _valid_temporal_understanding(value: Any) -> bool:
-    if not _non_empty_mapping(value):
-        return False
-    if value.get("parse_failed") or value.get("validation_status") == "incomplete":
-        return False
-    has_content = bool(
-        _as_list(value.get("event_sequence"))
-        or _as_list(value.get("state_changes"))
-        or _as_list(value.get("operation_steps"))
-        or _as_list(value.get("causal_links"))
-    )
-    return has_content and bool(_as_list(value.get("evidence_frame_paths")))
+    return _shared_has_visual_evidence(item)
 
 
 def _has_temporal_understanding(item: dict[str, Any]) -> bool:
-    if _valid_temporal_understanding(item.get("temporal_visual_understanding")):
-        return True
-    if _valid_temporal_understanding(
-        item.get("human_corrected_temporal_visual_understanding")
-    ):
-        return True
-    human_review = _human_review(item)
-    if _valid_temporal_understanding(
-        human_review.get("corrected_temporal_visual_understanding")
-    ):
-        return True
-    return _human_review_accepted(item)
+    return _shared_has_temporal_evidence(item)
 
 
 def _human_review_accepted(item: dict[str, Any]) -> bool:
-    human_review = _human_review(item)
-    return (
-        str(item.get("review_status") or human_review.get("status") or "").lower()
-        in ACCEPTED_REVIEW_STATUSES
-    )
+    return _shared_human_review_accepted(item)
 
 
 def _human_review(item: dict[str, Any]) -> dict[str, Any]:

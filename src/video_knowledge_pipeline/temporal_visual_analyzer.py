@@ -20,6 +20,7 @@ from .multimodal_frame_analyzer import (
     _read_import,
     _read_timeline,
     _refresh_post_vision_outputs,
+    _new_vision_batch_progress,
     _render_report,
     _resolve_frame,
     _has_mapping,
@@ -28,12 +29,15 @@ from .multimodal_frame_analyzer import (
     snapshot_timeline_for_vision_diff,
     timeline_vision_diff,
     write_vision_analysis_run_audit,
+    _vision_batch_execution_status,
+    _write_vision_batch_progress,
 )
 from .model_runtime_client import authorise_consented_remote_runtime
 from .repair_status import build_repair_status
 from .storage import read_json, write_json
 from .video_frame_router import _frame_paths
 from .visual_integration import integrated_visual
+from .visual_evidence import evidence_index_sets
 from .vision_execution_route import resolve_vision_task_execution_route
 from .vision_export_consent import vision_export_consent_image_limits
 from .vision_api import parse_model_json, resolve_provider_config
@@ -41,35 +45,47 @@ from .vlm_preprocess import prepare_image_probe
 from .temporal_frame_preprocess import build_temporal_frame_manifest, prepare_temporal_image_probe
 
 
-def call_vision_model(*, provider_config, prompt, image_paths, allowed_roots=None):
-    return model_task_api_call("temporal_visual_analysis", provider_config=provider_config, prompt=prompt, image_paths=image_paths, allowed_roots=allowed_roots, execute=True, write=False)
+def call_vision_model(
+    *, provider_config, prompt, image_paths, allowed_roots=None, max_tokens=None
+):
+    kwargs = {
+        "provider_config": provider_config,
+        "prompt": prompt,
+        "image_paths": image_paths,
+        "allowed_roots": allowed_roots,
+        "execute": True,
+        "write": False,
+    }
+    if max_tokens is not None:
+        kwargs["max_tokens"] = max_tokens
+    return model_task_api_call("temporal_visual_analysis", **kwargs)
 
 
-def call_vision_model_with_broker_reservation(*, provider_config, prompt, image_paths, allowed_roots=None):
+def call_vision_model_with_broker_reservation(
+    *, provider_config, prompt, image_paths, allowed_roots=None, max_tokens=None
+):
     """Invoke one Proxy request only within the consent-bound runtime grant."""
     config = dict(provider_config or {})
     is_remote_proxy = (
         str(config.get("adapter_backend") or "").strip().lower() == "proxy"
         and str(config.get("execution_location") or "").strip().lower() == "remote"
     )
+    call_kwargs = {
+        "provider_config": config,
+        "prompt": prompt,
+        "image_paths": image_paths,
+        "allowed_roots": allowed_roots,
+    }
+    if max_tokens is not None:
+        call_kwargs["max_tokens"] = max_tokens
     if not is_remote_proxy:
-        return call_vision_model(
-            provider_config=config,
-            prompt=prompt,
-            image_paths=image_paths,
-            allowed_roots=allowed_roots,
-        )
+        return call_vision_model(**call_kwargs)
     with authorise_consented_remote_runtime(
         consent_id=str(config.get("consent_id") or ""),
         route_revision=str(config.get("route_revision") or ""),
         max_calls=1,
     ):
-        return call_vision_model(
-            provider_config=config,
-            prompt=prompt,
-            image_paths=image_paths,
-            allowed_roots=allowed_roots,
-        )
+        return call_vision_model(**call_kwargs)
 
 
 def run_temporal_visual_analysis(
@@ -89,6 +105,7 @@ def run_temporal_visual_analysis(
     vision_retry_delay_seconds: float = 0.0,
     execution_actor: str = "operator",
     export_consent: str | Path | None = None,
+    max_tokens: int | None = None,
 ) -> dict[str, Any]:
     root = Path(bundle_dir).expanduser().resolve()
     manifest_path = root / "manifest.json"
@@ -163,7 +180,22 @@ def run_temporal_visual_analysis(
             cfg = {**cfg, "consent_id": consent_id}
 
     results = []
-    for candidate in candidates:
+    progress = _new_vision_batch_progress(
+        root,
+        kind="temporal_sequence",
+        candidates=candidates,
+        execute=execute,
+        gate=gate,
+    )
+    for position, candidate in enumerate(candidates, start=1):
+        _write_vision_batch_progress(
+            root,
+            progress,
+            results=results,
+            current_index=_int_value(candidate.get("index")),
+            current_position=position,
+            status="running" if execute and not gate else "blocked" if gate else "planned",
+        )
         result = {
             "index": candidate["index"],
             "visual_route": candidate.get("visual_route"),
@@ -172,6 +204,11 @@ def run_temporal_visual_analysis(
             "executed": bool(execute and not gate),
             "ok": False,
             "error": str(gate.get("error") or "") if gate else "",
+            "finish_reason": "",
+            "truncated": False,
+            "complete": False,
+            "request_max_tokens": int(max_tokens) if max_tokens is not None else None,
+            "request_max_tokens_omitted": max_tokens is None,
         }
         if execute and not gate and candidate.get("frame_paths"):
             original_image_paths = [str(path) for path in candidate.get("frame_paths", []) if str(path)]
@@ -193,6 +230,9 @@ def run_temporal_visual_analysis(
             preprocess_ms = round((time.perf_counter() - preprocess_started) * 1000.0, 3)
             sent_image_paths = [str(path) for path in image_probe.get("image_paths") or original_image_paths if str(path)]
             model_started = time.perf_counter()
+            call_kwargs: dict[str, Any] = {"allowed_roots": [str(root)]}
+            if max_tokens is not None:
+                call_kwargs["max_tokens"] = max_tokens
             response = call_vision_model_with_retries(
                 provider_config=cfg,
                 prompt=str(result["prompt"]),
@@ -200,13 +240,21 @@ def run_temporal_visual_analysis(
                 attempts=vision_retries,
                 delay_seconds=vision_retry_delay_seconds,
                 call_model=call_vision_model_with_broker_reservation,
-                call_kwargs={"allowed_roots": [str(root)]},
+                call_kwargs=call_kwargs,
             )
             model_call_ms = round((time.perf_counter() - model_started) * 1000.0, 3)
+            truncated = bool(response.get("truncated"))
+            complete = bool(
+                response.get("complete", response.get("ok") and not truncated)
+            ) and not truncated
+            response_error = str(response.get("error") or "")
+            if truncated and not response_error:
+                response_error = "model_output_truncated"
             result.update(
                 {
-                    "ok": response.get("ok"),
-                    "error": response.get("error", ""),
+                    "ok": bool(response.get("ok")) and complete,
+                    "status": "truncated" if truncated else str(response.get("status") or ("ok" if response.get("ok") else "failed")),
+                    "error": response_error,
                     "raw_content": response.get("content", ""),
                     "sent_image_paths": sent_image_paths,
                     "image_probe": image_probe,
@@ -219,21 +267,64 @@ def run_temporal_visual_analysis(
                     },
                     "attempts": response.get("attempts", []),
                     "attempt_count": response.get("attempt_count", 1),
+                    "finish_reason": str(response.get("finish_reason") or ""),
+                    "request_max_tokens": response.get("request_max_tokens", max_tokens),
+                    "request_max_tokens_omitted": bool(
+                        response.get("request_max_tokens_omitted", max_tokens is None)
+                    ),
+                    "response_chars": len(str(response.get("content") or "")),
+                    "truncated": truncated,
+                    "complete": complete,
                 }
             )
-            if response.get("ok"):
+            if response.get("ok") and complete:
                 normalise_candidate = {**candidate, "frame_input": result["frame_input"]}
                 understanding = _normalise_temporal_understanding(parse_model_json(str(response.get("content") or "")), normalise_candidate)
                 _apply_single(timeline, int(candidate["index"]), understanding)
                 applied.append(int(candidate["index"]))
                 result["temporal_visual_understanding"] = understanding
         results.append(result)
+        _write_vision_batch_progress(
+            root,
+            progress,
+            results=results,
+            current_index=_int_value(candidate.get("index")),
+            current_position=position,
+            status="running" if execute and not gate else "blocked" if gate else "planned",
+        )
 
+    run_status = str(gate.get("status") or "ok") if gate else "ok"
+    if execute and not gate:
+        run_status = _vision_batch_execution_status(results)
+    evidence_indexes = evidence_index_sets(timeline)
+    run_complete_indexes = sorted(
+        {
+            int(item.get("index"))
+            for item in results
+            if item.get("complete") and _int_value(item.get("index")) > 0
+        }
+    )
+    run_truncated_indexes = sorted(
+        {
+            int(item.get("index"))
+            for item in results
+            if item.get("truncated") and _int_value(item.get("index")) > 0
+        }
+    )
+    run_failed_indexes = sorted(
+        {
+            int(item.get("index"))
+            for item in results
+            if item.get("executed") and not item.get("ok") and _int_value(item.get("index")) > 0
+        }
+    )
+    timeline_complete_indexes = evidence_indexes["temporal_model_complete"]
+    export_consumable_indexes = evidence_indexes["temporal_export_consumable"]
     summary = {
         "schema": "lecture_temporal_visual_analysis_summary.v1",
         "total": len(candidates),
         "execute": execute,
-        "status": str(gate.get("status") or "ok") if gate else "ok",
+        "status": run_status,
         "error": str(gate.get("error") or "") if gate else "",
         "preflight_path": str(gate.get("preflight_path") or "") if gate else "",
         "preflight_json_path": str(gate.get("preflight_json_path") or "") if gate else "",
@@ -246,8 +337,23 @@ def run_temporal_visual_analysis(
         "image_probe_jpeg_quality": effective_image_probe_jpeg_quality,
         "vision_retries": int(vision_retries or 1),
         "vision_retry_delay_seconds": float(vision_retry_delay_seconds or 0),
+        "request_max_tokens": int(max_tokens) if max_tokens is not None else None,
+        "request_max_tokens_omitted": max_tokens is None,
         "timing": _temporal_timing_summary(results),
         "frame_input": _temporal_frame_input_summary(results),
+        "complete_count": sum(1 for item in results if item.get("complete")),
+        "truncated_count": sum(1 for item in results if item.get("truncated")),
+        "failed_count": sum(1 for item in results if item.get("executed") and not item.get("ok")),
+        "run_complete_indexes": run_complete_indexes,
+        "run_truncated_indexes": run_truncated_indexes,
+        "run_failed_indexes": run_failed_indexes,
+        "timeline_complete_count": len(timeline_complete_indexes),
+        "timeline_complete_indexes": timeline_complete_indexes,
+        "export_consumable_count": len(export_consumable_indexes),
+        "export_consumable_indexes": export_consumable_indexes,
+        "run_complete_not_consumable_indexes": sorted(
+            set(run_complete_indexes) - set(export_consumable_indexes)
+        ),
         "indexes": [int(index) for index in indexes or []],
         "imported": len(imported),
         "updated": len(set(applied)),
@@ -262,6 +368,15 @@ def run_temporal_visual_analysis(
         },
         "updated_at": now_iso(),
     }
+    progress_path = _write_vision_batch_progress(
+        root,
+        progress,
+        results=results,
+        current_index=0,
+        current_position=len(candidates),
+        status=run_status,
+    )
+    summary["progress_path"] = str(progress_path)
     manifest["temporal_visual_analysis"] = {
         "schema": "lecture_temporal_visual_analysis.v1",
         "count": len(candidates),
@@ -313,6 +428,7 @@ def run_temporal_visual_analysis(
         "run_audit": run_audit,
         "run_registry": run_registry,
         "post_run_refresh": post_run_refresh,
+        "progress_path": str(progress_path),
         "vision_restore_hint": restore_hint,
         "summary": summary,
         "items": results,

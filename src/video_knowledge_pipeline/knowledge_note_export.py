@@ -31,6 +31,12 @@ from .transcript_speakers import cue_speaker, speaker_display_name, speaker_labe
 from .transcript_semantic_correction import transcript_semantic_correction_status
 from .transcript_sidecar import ensure_review_transcript_sidecar
 from .visual_structure import reconcile_ebook_pipeline_checkpoints
+from .visual_evidence import (
+    evidence_index_sets,
+    human_review_accepted as _shared_human_review_accepted,
+    temporal_understanding_value,
+    visual_understanding_value,
+)
 
 
 EXPORT_SCHEMA = "lecture_knowledge_note_export.v1"
@@ -219,6 +225,15 @@ def export_knowledge_note(
         "ebook_checkpoint_reconciliation": ebook_checkpoint_reconciliation,
         "transcript_quality_gate": transcript_quality_gate,
         "summary": summary,
+        "write_status": "planned" if not write else "pending",
+        "quality_status": str(production_artifact_gate.get("status") or "unknown"),
+        "quality_ready": bool(production_artifact_gate.get("formal_generation_allowed")),
+        "status": (
+            "planned_quality_ready"
+            if production_artifact_gate.get("formal_generation_allowed")
+            else "planned_quality_blocked"
+        ),
+        "ok": False,
         "write": write,
     }
     if write:
@@ -290,11 +305,39 @@ def export_knowledge_note(
             dependency_snapshot_path = out_dir / "knowledge-export-dependency-snapshot.json"
             write_json(dependency_snapshot_path, dependency_snapshot)
             result["dependency_snapshot"] = dependency_snapshot
-            result["status"] = (
+            result["write_status"] = (
                 "exported"
                 if canonical_integrity.get("passed")
                 else "blocked_canonical_export_mismatch"
             )
+            result["quality_status"] = str(
+                production_artifact_gate.get("status") or "unknown"
+            )
+            result["quality_ready"] = bool(
+                production_artifact_gate.get("formal_generation_allowed")
+            )
+            result["status"] = _export_status(
+                write_status=result["write_status"],
+                quality_ready=result["quality_ready"],
+            )
+            result["ok"] = bool(
+                result["write_status"] == "exported" and result["quality_ready"]
+            )
+            freshness_path = root / "knowledge-export-freshness.json"
+            freshness_receipt = {
+                "schema": "video_knowledge_pipeline.knowledge_export_freshness_receipt.v1",
+                "status": "fresh",
+                "reason": "knowledge_export_dependency_snapshot_refreshed",
+                "snapshot_sha256": str(dependency_snapshot.get("snapshot_sha256") or ""),
+                "write_status": result["write_status"],
+                "quality_status": result["quality_status"],
+                "quality_ready": result["quality_ready"],
+                "freshness_is_not_quality_approval": True,
+                "written_at": now_iso(),
+            }
+            write_json(freshness_path, freshness_receipt)
+            result["knowledge_export_freshness"] = "fresh"
+            result["knowledge_export_freshness_path"] = str(freshness_path)
             write_json(summary_path, result)
             result["dependency_snapshot_path"] = str(dependency_snapshot_path)
             manifest["knowledge_note_export"] = {
@@ -369,6 +412,12 @@ def export_knowledge_note(
             write_json(manifest_path, manifest)
     result["run_registry"] = _register_export_run(root, result, write=write)
     return result
+
+
+def _export_status(*, write_status: str, quality_ready: bool) -> str:
+    if write_status != "exported":
+        return write_status
+    return "exported_quality_ready" if quality_ready else "exported_quality_blocked"
 
 
 def _knowledge_export_dependency_inputs(root: Path, manifest: dict[str, Any]) -> list[dict[str, Any]]:
@@ -561,6 +610,14 @@ def _register_export_run(root: Path, result: dict[str, Any], *, write: bool) -> 
                 "detail": "Content candidates were exported, but they are not linked back to smart-summary chapters.",
             }
         )
+    if not bool(result.get("quality_ready")):
+        failed_items.append(
+            {
+                "id": "production_artifact_gate",
+                "reason": "quality_gate_blocked",
+                "detail": str(result.get("quality_status") or "quality_not_ready"),
+            }
+        )
     if any(str(item.get("reason")) == "missing_export_artifact" for item in failed_items) or any(str(item.get("reason")) == "content_candidate_missing" for item in failed_items):
         status = "needs_input"
     elif failed_items:
@@ -584,6 +641,9 @@ def _register_export_run(root: Path, result: dict[str, Any], *, write: bool) -> 
             "candidate_count": len(candidates),
             "linked_content_candidate_count": linked_count,
             "chapter_links_available": bool(chapter_link_status.get("exists")),
+            "write_status": str(result.get("write_status") or "unknown"),
+            "quality_status": str(result.get("quality_status") or "unknown"),
+            "quality_ready": bool(result.get("quality_ready")),
         },
         artifacts=artifacts,
         failed_items=failed_items,
@@ -609,6 +669,8 @@ def _export_run_next_actions(status: str, failed_items: list[dict[str, Any]]) ->
         return ["Inspect timeline evidence and rerun export-knowledge-note after ASR/OCR/vision evidence exists."]
     if "content_candidate_chapter_refs_missing" in reasons:
         return ["Run build-smart-summary-chapters before export-knowledge-note to link content candidates to smart-summary chapters."]
+    if "quality_gate_blocked" in reasons:
+        return ["Files were written for review; inspect production-artifact-gate.json before treating them as production-ready."]
     if status == "completed":
         return ["Open exports/knowledge-note.md, full-transcript.md, smart-summary.md, and content-candidate-pack.md for human review."]
     return ["Review the failed items and rerun export-knowledge-note after fixing the inputs."]
@@ -1467,14 +1529,18 @@ def _build_summary(manifest: dict[str, Any], timeline: list[dict[str, Any]]) -> 
         for index, item in enumerate(timeline, start=1)
         if _needs_document_structure(item)
     ]
+    evidence_indexes = evidence_index_sets(timeline)
     return {
         "timeline_items": len(timeline),
         "route_counts": route_counts,
         "items_with_transcript": sum(1 for item in timeline if _text(item.get("transcript"))),
         "items_with_visual_text": sum(1 for item in timeline if _item_visual_text(item) or _human_keep_image(item)),
         "items_with_structured_visual": sum(1 for item in timeline if _structured_entries(item) or _human_structured_fallback(item)),
-        "items_with_visual_understanding": sum(1 for item in timeline if _item_visual_understanding(item) or _human_review_accepted(item)),
-        "items_with_temporal_understanding": sum(1 for item in timeline if _item_temporal_understanding(item) or _human_review_accepted(item)),
+        "items_with_visual_understanding": len(evidence_indexes["visual_export_consumable"]),
+        "items_with_temporal_understanding": len(evidence_indexes["temporal_export_consumable"]),
+        "items_with_model_visual_understanding": len(evidence_indexes["visual_model_complete"]),
+        "items_with_model_temporal_understanding": len(evidence_indexes["temporal_model_complete"]),
+        "visual_evidence_indexes": evidence_indexes,
         "document_visual_missing_structure": missing_structure,
         "visual_understanding_missing": missing_visual,
         "coverage_status": (manifest.get("knowledge_coverage") or {}).get("status") if isinstance(manifest.get("knowledge_coverage"), dict) else "",
@@ -3528,11 +3594,7 @@ def _item_visual_text(item: dict[str, Any]) -> str:
 
 
 def _item_visual_understanding(item: dict[str, Any]) -> dict[str, Any]:
-    return (
-        _valid_understanding(item.get("human_corrected_visual_understanding"))
-        or _valid_understanding(_human_review(item).get("corrected_visual_understanding"))
-        or _valid_understanding(item.get("visual_understanding"))
-    )
+    return visual_understanding_value(item)
 
 
 def _item_tagger_tags(item: dict[str, Any], *, limit: int = 12) -> list[str]:
@@ -3558,22 +3620,7 @@ def _item_tagger_tags(item: dict[str, Any], *, limit: int = 12) -> list[str]:
 
 
 def _item_temporal_understanding(item: dict[str, Any]) -> dict[str, Any]:
-    return (
-        _valid_understanding(item.get("human_corrected_temporal_visual_understanding"))
-        or _valid_understanding(_human_review(item).get("corrected_temporal_visual_understanding"))
-        or _valid_understanding(item.get("temporal_visual_understanding"))
-    )
-
-
-def _valid_understanding(value: Any) -> dict[str, Any]:
-    data = _mapping(value)
-    if not data:
-        return {}
-    if data.get("parse_failed") is True:
-        return {}
-    if str(data.get("validation_status") or "").strip().lower() == "incomplete":
-        return {}
-    return data
+    return temporal_understanding_value(item)
 
 
 def _human_review(item: dict[str, Any]) -> dict[str, Any]:
@@ -3581,18 +3628,7 @@ def _human_review(item: dict[str, Any]) -> dict[str, Any]:
 
 
 def _human_review_accepted(item: dict[str, Any]) -> bool:
-    review = _human_review(item)
-    return str(item.get("review_status") or review.get("status") or "").lower() in {
-        "accepted",
-        "reviewed",
-        "keep_image",
-        "accepted_known_gap",
-        "accepted_no_visual_content",
-        "accepted_provider_blocked",
-        "corrected_visual_text",
-        "corrected_visual_understanding",
-        "corrected_temporal_visual_understanding",
-    }
+    return _shared_human_review_accepted(item)
 
 
 def _human_keep_image(item: dict[str, Any]) -> bool:

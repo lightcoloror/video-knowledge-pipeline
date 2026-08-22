@@ -78,6 +78,7 @@ from .extractor_execution import extractor_run_log, run_extractor_plan
 from .external_capability_pack import build_external_capability_pack
 from .frame_recapture import run_frame_recapture_plan
 from .general_tagger_adapter import general_tagger_status, run_general_tagger
+from .temporal_tag_delta import run_temporal_tag_delta
 from .high_res_tile_plan import run_high_res_tile_plan
 from .tile_result_import_builder import build_tile_result_import
 from .tile_result_merge import run_tile_result_merge
@@ -1232,6 +1233,7 @@ def main(argv: list[str] | None = None) -> int:
             device=args.device,
             prefer_language=args.prefer_language,
             limit=args.limit,
+            frame_mode=args.frame_mode,
             execute=args.execute,
             import_annotations=not args.no_import,
             write=not args.no_write,
@@ -1323,7 +1325,7 @@ def main(argv: list[str] | None = None) -> int:
             execute=args.execute,
             provider_config=_provider_config_arg(args.provider_config),
             limit=args.limit,
-            indexes=_int_csv_arg(args.indexes),
+            indexes=_int_csv_and_repeat_arg(args.indexes, args.index),
             confirm_vision_calls=args.confirm_vision_calls,
             confirm_vision_indexes=args.confirm_vision_indexes,
             image_probe_max_edge=args.image_probe_max_edge,
@@ -1352,7 +1354,7 @@ def main(argv: list[str] | None = None) -> int:
             execute=args.execute,
             frame_count=args.frame_count,
             limit=args.limit,
-            indexes=_int_csv_arg(args.indexes),
+            indexes=_int_csv_and_repeat_arg(args.indexes, args.index),
             provider_config=_provider_config_arg(args.provider_config),
             confirm_vision_calls=args.confirm_vision_calls,
             confirm_vision_indexes=args.confirm_vision_indexes,
@@ -1362,6 +1364,7 @@ def main(argv: list[str] | None = None) -> int:
             vision_retry_delay_seconds=args.vision_retry_delay_seconds,
             execution_actor=args.execution_actor,
             export_consent=args.export_consent or None,
+            max_tokens=args.max_tokens or None,
         )
     elif args.command == "test-vision-provider":
         result = test_vision_provider(_provider_config_arg(args.provider_config), image_paths=_csv_arg(args.image_paths) or [])
@@ -1432,6 +1435,19 @@ def main(argv: list[str] | None = None) -> int:
         result = apply_subtitle_review(
             args.bundle_dir,
             review_json=args.review_json,
+            write=not args.no_write,
+        )
+    elif args.command == "run-temporal-tag-delta":
+        result = run_temporal_tag_delta(
+            args.bundle_dir,
+            input_json=args.input_json,
+            execute_tagger=args.execute_tagger,
+            source_root=args.source_root or None,
+            checkpoint_path=args.checkpoint_path or None,
+            device=args.device,
+            prefer_language=args.prefer_language,
+            limit=args.limit,
+            min_frames=args.min_frames,
             write=not args.no_write,
         )
     elif args.command == "transcript-correction-pack":
@@ -1749,8 +1765,12 @@ def main(argv: list[str] | None = None) -> int:
             frame_count=args.frame_count,
             include_semantic=not args.no_semantic,
             include_temporal=not args.no_temporal,
-            semantic_indexes=_int_csv_arg(args.semantic_indexes),
-            temporal_indexes=_int_csv_arg(args.temporal_indexes),
+            semantic_indexes=_int_csv_and_repeat_arg(
+                args.semantic_indexes, args.semantic_index
+            ),
+            temporal_indexes=_int_csv_and_repeat_arg(
+                args.temporal_indexes, args.temporal_index
+            ),
             check_provider=args.check_provider,
             write=not args.no_write,
         )
@@ -4001,9 +4021,34 @@ def build_parser() -> argparse.ArgumentParser:
     general_tagger.add_argument("--device", choices=["auto", "cpu", "cuda"], default="cuda", help="CUDA is required for real local-model execution; auto never falls back to CPU")
     general_tagger.add_argument("--prefer-language", choices=["zh", "en"], default="zh")
     general_tagger.add_argument("--limit", type=int, default=0)
+    general_tagger.add_argument(
+        "--frame-mode",
+        choices=["representative", "continuous"],
+        default="representative",
+        help="Tag one representative frame or all ordered frames; continuous mode remains candidate-only",
+    )
     general_tagger.add_argument("--execute", action="store_true")
     general_tagger.add_argument("--no-import", action="store_true")
     general_tagger.add_argument("--no-write", action="store_true")
+
+    tag_delta = sub.add_parser(
+        "run-temporal-tag-delta",
+        help="Smooth continuous-frame tag changes and escalate dynamic or ambiguous segments",
+    )
+    tag_delta.add_argument("bundle_dir")
+    tag_delta.add_argument("--input-json", help="Synthetic/manual per-frame tag observations")
+    tag_delta.add_argument(
+        "--execute-tagger",
+        action="store_true",
+        help="Run the existing local RAM++ backend over ordered frames",
+    )
+    tag_delta.add_argument("--source-root", default="")
+    tag_delta.add_argument("--checkpoint-path", default="")
+    tag_delta.add_argument("--device", choices=["auto", "cpu", "cuda"], default="cuda")
+    tag_delta.add_argument("--prefer-language", choices=["zh", "en"], default="zh")
+    tag_delta.add_argument("--limit", type=int, default=0, help="Maximum timeline segments; 0 means all candidates")
+    tag_delta.add_argument("--min-frames", type=int, default=3)
+    tag_delta.add_argument("--no-write", action="store_true")
 
     ocr = sub.add_parser("run-ocr-backfill", help="Import or execute OCR backfill for bundle frames")
     ocr.add_argument("bundle_dir")
@@ -4086,6 +4131,13 @@ def build_parser() -> argparse.ArgumentParser:
     multimodal.add_argument("--provider-config", help="Inline JSON or JSON file: provider/openai_compatible/gemini/local_qwen_vl, api_key, model, base_url")
     multimodal.add_argument("--limit", type=int)
     multimodal.add_argument("--indexes")
+    multimodal.add_argument(
+        "--index",
+        action="append",
+        type=int,
+        default=[],
+        help="Repeatable timeline index; PowerShell-safe alternative to --indexes CSV",
+    )
     multimodal.add_argument("--confirm-vision-calls", type=int)
     multimodal.add_argument("--confirm-vision-indexes", default="")
     multimodal.add_argument("--image-probe-max-edge", type=int, default=0, help="Resize images sent to provider; 0 sends originals")
@@ -4113,6 +4165,13 @@ def build_parser() -> argparse.ArgumentParser:
     temporal.add_argument("--frame-count", type=int)
     temporal.add_argument("--limit", type=int)
     temporal.add_argument("--indexes")
+    temporal.add_argument(
+        "--index",
+        action="append",
+        type=int,
+        default=[],
+        help="Repeatable timeline index; PowerShell-safe alternative to --indexes CSV",
+    )
     temporal.add_argument("--provider-config", help="Inline JSON or JSON file with provider/base_url/model/api_key")
     temporal.add_argument("--confirm-vision-calls", type=int)
     temporal.add_argument("--confirm-vision-indexes", default="")
@@ -4122,6 +4181,7 @@ def build_parser() -> argparse.ArgumentParser:
     temporal.add_argument("--vision-retry-delay-seconds", type=float, default=0.0)
     temporal.add_argument("--execution-actor", choices=["operator", "agent"], default="operator")
     temporal.add_argument("--export-consent", default="", help="Scoped consent JSON required for agent execution")
+    temporal.add_argument("--max-tokens", type=int, default=0, help="Optional explicit output-token ceiling; truncation remains incomplete")
 
     vision_test = sub.add_parser("test-vision-provider", help="Run a non-persistent provider connectivity and JSON-output test")
     vision_test.add_argument("--provider-config", help="Inline JSON or JSON file with provider/base_url/model/api_key; local_qwen_vl/local_vlm may omit api_key")
@@ -4514,6 +4574,8 @@ def build_parser() -> argparse.ArgumentParser:
     preflight.add_argument("--frame-count", type=int)
     preflight.add_argument("--semantic-indexes", default="")
     preflight.add_argument("--temporal-indexes", default="")
+    preflight.add_argument("--semantic-index", action="append", type=int, default=[])
+    preflight.add_argument("--temporal-index", action="append", type=int, default=[])
     preflight.add_argument("--no-semantic", action="store_true")
     preflight.add_argument("--no-temporal", action="store_true")
     preflight.add_argument("--check-provider", action="store_true", help="Run provider smoke checks and block if text/image JSON checks fail")
@@ -5259,6 +5321,14 @@ def _int_csv_arg(value: str | None) -> list[int] | None:
     if value is None:
         return None
     return [int(part.strip()) for part in value.split(",") if part.strip()]
+
+
+def _int_csv_and_repeat_arg(
+    csv_value: str | None, repeated: list[int] | None
+) -> list[int] | None:
+    values = (_int_csv_arg(csv_value) or []) + (repeated or [])
+    unique = list(dict.fromkeys(int(value) for value in values if int(value) > 0))
+    return unique or None
 
 
 def _artifact_specs(values: list[str] | None) -> list[dict[str, str]]:

@@ -8,7 +8,7 @@ from .powershell import quote_powershell_literal as _ps_quote
 from .models import now_iso
 from .production_artifact_gate import evaluate_production_artifact_gate
 from .run_artifact_registry import register_bundle_run
-from .smart_summary_codex import generate_smart_summary_with_codex
+from .smart_summary_codex import generate_smart_summary_with_codex, numbered_summary_heading
 from .storage import read_json, write_json
 from .transcript import format_timestamp
 
@@ -211,7 +211,7 @@ def _render_codex_summary(root: Path, workflow: dict[str, Any], sections: list[d
         "",
         generation_note,
         "",
-        "## 基本信息",
+        numbered_summary_heading("基本信息"),
         "",
         f"- 视频名：{title}",
         f"- 时长：`{format_timestamp(duration)}`",
@@ -220,31 +220,31 @@ def _render_codex_summary(root: Path, workflow: dict[str, Any], sections: list[d
         f"- 章节修订来源：`{source_path}`",
         "- 视觉证据状态：视觉证据未执行/待复核的章节仍必须以原视频、OCR/ebook、多模态结果和人工审核为准。",
         "",
-        "## 一句话概览",
+        numbered_summary_heading("一句话概览"),
         "",
         overview,
         "",
-        "## 核心主题 / 课程主线",
+        numbered_summary_heading("核心主题 / 课程主线", number="3"),
         "",
         f"- 课程主线：围绕《{title}》按时间顺序整理讲师的关键判断、方法步骤、案例解释和后续行动。",
         "- 章节来源：每节来自 `smart-summary-section-workflow` 的 section state；未修订章节不会被伪装成已完成总结。",
         "- 证据边界：本稿可读性来自章节修订，事实准确性仍以 bundle 内 transcript、timeline、视觉证据和 review 记录为准。",
         "",
-        "## 分段总结",
+        numbered_summary_heading("分段总结"),
         "",
     ]
     if ready:
-        for row in ready:
-            lines.extend(_section_markdown(row))
+        for index, row in enumerate(ready, start=1):
+            lines.extend(_section_markdown(row, number=f"4.1.{index}"))
     else:
         lines.append("（没有可安装的章节修订稿。请先填写 `exports/smart-summary-section-todo.json` 的 `draft_markdown` / `revised_markdown` / `final_markdown`。）")
-    lines.extend(["", "## 关键观点 / 方法论", ""])
-    lines.extend(_extract_bullets(ready, fallback="- 暂无已修订章节可抽取关键观点；请先完成章节修订。", mode="points"))
-    lines.extend(["", "## 可执行动作清单", ""])
-    lines.extend(_extract_bullets(ready, fallback="- 暂无已修订章节可抽取行动项；请先完成章节修订。", mode="actions"))
-    lines.extend(["", "## 高频话术 / 可复用表达", ""])
-    lines.extend(_extract_bullets(ready, fallback="- 暂无已修订章节可抽取话术；请先完成章节修订。", mode="expressions"))
-    lines.extend(["", "## 待复核点 / 低置信内容", ""])
+    lines.extend(["", numbered_summary_heading("关键观点 / 方法论", number="5"), ""])
+    lines.extend(_extract_bullets(ready, fallback="- 暂无已修订章节可抽取关键观点；请先完成章节修订。", mode="points", numbering_prefix="5.1"))
+    lines.extend(["", numbered_summary_heading("可执行动作清单"), ""])
+    lines.extend(_extract_bullets(ready, fallback="- 暂无已修订章节可抽取行动项；请先完成章节修订。", mode="actions", numbering_prefix="7.1"))
+    lines.extend(["", numbered_summary_heading("高频话术 / 可复用表达", number="8"), ""])
+    lines.extend(_extract_bullets(ready, fallback="- 暂无已修订章节可抽取话术；请先完成章节修订。", mode="expressions", numbering_prefix="8.1"))
+    lines.extend(["", numbered_summary_heading("待复核点 / 低置信内容", number="9"), ""])
     missing = [row for row in sections if not row.get("final_markdown")]
     if missing:
         lines.append("- 以下章节还没有修订稿，不能视为最终智能总结覆盖：" + "、".join(str(row.get("section_id")) for row in missing) + "。")
@@ -265,13 +265,14 @@ def _section_title(row: dict[str, Any], raw_markdown: str) -> str:
     return "chapter points"
 
 
-def _section_markdown(row: dict[str, Any]) -> list[str]:
+def _section_markdown(row: dict[str, Any], *, number: str = "") -> list[str]:
     raw_markdown = str(row.get("final_markdown") or "")
     title = _section_title(row, raw_markdown)
     start = str(row.get("start_time") or format_timestamp(float(row.get("start") or 0.0)))
     end = str(row.get("end_time") or format_timestamp(float(row.get("end") or 0.0)))
     body = _normalize_section_body(raw_markdown)
-    lines = [f"### `{start} - {end}` {title}", ""]
+    prefix = f"{number} " if number else ""
+    lines = [f"### {prefix}`{start} - {end}` {title}", ""]
     lines.append(body or "（该章节修订为空。）")
     lines.append("")
     return lines
@@ -310,7 +311,7 @@ def _overview(title: str, sections: list[dict[str, Any]]) -> str:
     return f"这份总结围绕《{title}》的完整章节修订展开，从“{first}”推进到“{last}”，重点保留可复习的课程主线、关键判断和行动线索。"
 
 
-def _extract_bullets(sections: list[dict[str, Any]], *, fallback: str, mode: str) -> list[str]:
+def _extract_bullets(sections: list[dict[str, Any]], *, fallback: str, mode: str, numbering_prefix: str = "") -> list[str]:
     keywords = {
         "points": ("关键", "核心", "原则", "判断", "方法", "因为", "所以"),
         "actions": ("要", "需要", "先", "再", "复盘", "记录", "确认", "整理", "避免"),
@@ -337,7 +338,11 @@ def _extract_bullets(sections: list[dict[str, Any]], *, fallback: str, mode: str
         for candidates in per_section:
             if not candidates:
                 continue
-            rows.append(candidates.pop(0))
+            row = candidates.pop(0)
+            if numbering_prefix:
+                rows.append(f"- {numbering_prefix}.{len(rows) + 1} " + row[2:])
+            else:
+                rows.append(row)
             if len(rows) >= max_rows:
                 break
     return rows or [fallback]

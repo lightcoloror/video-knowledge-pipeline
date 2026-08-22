@@ -52,6 +52,17 @@ REQUIRED_HEADINGS = (
     "## 高频话术",
     "## 待复核点",
 )
+SUMMARY_MAIN_SECTION_NUMBERS = {
+    "基本信息": "1",
+    "一句话概览": "2",
+    "核心主题": "3",
+    "分段总结": "4",
+    "关键观点": "5",
+    "证据引用": "6",
+    "可执行动作清单": "7",
+    "高频话术": "8",
+    "待复核点": "9",
+}
 INTERVIEW_REQUIRED_HEADINGS = (
     "## 基本信息",
     "## 一句话概览",
@@ -67,6 +78,15 @@ EVIDENCE_BOUNDARY = (
     "> 证据边界：本总结仅依据已入库的文本、时间轴与视觉证据；"
     "未入库或未核验的画面、课件和条款细节均为待复核，不应作为确定事实。"
 )
+
+
+def numbered_summary_heading(title: str, *, level: int = 2, number: str | None = None) -> str:
+    """Render an Arabic-numbered summary heading with a stable hierarchy."""
+
+    clean_title = str(title or "").strip()
+    clean_number = str(number or SUMMARY_MAIN_SECTION_NUMBERS.get(clean_title) or "").strip()
+    prefix = "#" * max(1, int(level))
+    return f"{prefix} {clean_number + ' ' if clean_number else ''}{clean_title}".rstrip()
 
 
 def generate_smart_summary_with_codex(
@@ -536,6 +556,7 @@ def _render_llm_rewrite_pack(root: Path, *, title: str, provider: str, pack: dic
         "- 分段总结要用编辑后的中文概括，每段说明主题、讲师判断、例子/方法、行动含义。",
         "- 关键观点和动作清单要跨全片均衡，不能只抽前几分钟。",
         "- 章节证据必须覆盖视频结尾；不要因章节数量而静默截断长视频。",
+        "- 默认使用阿拉伯数字层级编号：主栏目使用 `1`、`2`、`3`，栏目内条目使用 `1.1.1`、`1.1.2` 这类结构；禁止使用甲乙丙丁或章节一/二/三作为默认序号。",
         "- 关键观点、可执行动作清单和高频话术的每一项都要带 `HH:MM:SS` 来源时间；每个栏目至少覆盖视频的两个不同时间区间，并包含后半段证据。",
         "- 保留时间戳用于导航，但不要让时间戳压过内容。",
         "- 不要依据第一人称、语气或模糊上下文推断讲师姓名、机构、平台归属或资历；转写未明确说明时标为待复核。",
@@ -789,14 +810,17 @@ def smart_summary_quality_check(
 ) -> dict[str, Any]:
     root = Path(bundle_dir).expanduser().resolve()
     exports = root / "exports"
+    requested_summary_path = str(summary_path or "")
     if summary_path:
-        path = Path(summary_path).expanduser().resolve()
+        path = _resolve_summary_path(root, summary_path)
     else:
         codex_summary = exports / "smart-summary.codex.md"
         legacy_summary = exports / "smart-summary.md"
         # The installed section/global-reduce artifact is the final candidate.
         path = codex_summary if codex_summary.is_file() else legacy_summary
-    text = path.read_text(encoding="utf-8-sig") if path.exists() else ""
+    text = _normalize_markdown_newlines(
+        path.read_text(encoding="utf-8-sig") if path.exists() else ""
+    )
     content_profile = resolve_content_profile(root)
     interview_profile = content_profile.get("profile_id") in {
         "interview-v1",
@@ -922,9 +946,9 @@ def smart_summary_quality_check(
     }
     for key, evidence in visual_number_evidence.items():
         number_evidence.setdefault(key, []).extend(evidence)
-    summary_number_map = _quality_number_evidence(
-        _strip_quality_metadata_identifiers(summary_body, root)
-    )
+    stripped_summary_body = _strip_quality_metadata_identifiers(summary_body, root)
+    structural_numbers = _structural_heading_numbers(stripped_summary_body)
+    summary_number_map = _quality_number_evidence(stripped_summary_body)
     unsupported_number_keys = sorted(set(summary_number_map) - set(number_evidence))
     unsupported_numbers = sorted(
         {
@@ -991,6 +1015,8 @@ def smart_summary_quality_check(
     result = {
         "schema": QUALITY_SCHEMA,
         "bundle_dir": str(root),
+        "requested_summary_path": requested_summary_path,
+        "resolved_summary_path": str(path),
         "summary_path": str(path),
         "status": status,
         "passed": passed,
@@ -1016,6 +1042,7 @@ def smart_summary_quality_check(
             "compression_target": list(compression_target),
             "repetition_rate": repetition_rate,
             "unsupported_numbers": unsupported_numbers,
+            "structural_numbers": structural_numbers,
             "number_evidence": {
                 "supporting_claims": supporting_claims,
                 "unsupported_claims": _unsupported_number_claims(
@@ -1075,7 +1102,7 @@ def _generate_local_codex_summary(root: Path) -> str:
         "",
         "生成方式：`local_scaffold_not_llm`。这是 VKP 自动生成的本地结构化草稿，不等于真实 Codex/LLM 改写成品；默认导出必须继续进入 Codex/LLM 改写层，或者明确标记为待改写。",
         "",
-        "## 基本信息",
+        numbered_summary_heading("基本信息"),
         "",
         f"- 视频名：{title}",
         f"- 时长：`{format_timestamp(duration)}`",
@@ -1088,27 +1115,27 @@ def _generate_local_codex_summary(root: Path) -> str:
         f"- 视觉证据状态：{_local_visual_status(visual_digest)}",
         f"- ASR/字幕语义纠错状态：`{transcript_semantic.get('final_status', 'not_started')}`",
         "",
-        "## 一句话概览",
+        numbered_summary_heading("一句话概览"),
         "",
         overview,
         "",
-        "## 核心主题 / 课程主线",
+        numbered_summary_heading("核心主题 / 课程主线", number="3"),
         "",
     ]
     lines.extend(_local_mainline_lines(title, chunks, term_summary, term_arbitration_codex, codex_terms))
     lines.extend(_course_map_lines(course_map))
     # Long-video memory remains an evidence source; do not dump memory rows into the main readable narrative.
-    lines.extend(["", "## 分段总结", ""])
+    lines.extend(["", numbered_summary_heading("分段总结"), ""])
     lines.extend(_local_chunk_summary_lines(chunks, visual_digest))
-    lines.extend(["", "## 关键观点 / 方法论", ""])
-    lines.extend(_snippet_lines(key_points, fallback="暂无足够稳定的观点句，请回看完整逐字稿。"))
-    lines.extend(["", "## 证据引用 / Citation Digest", ""])
-    lines.extend(_citation_lines(citations))
-    lines.extend(["", "## 可执行动作清单", ""])
-    lines.extend(_action_lines(actions))
-    lines.extend(["", "## 高频话术 / 可复用表达", ""])
-    lines.extend(_expression_lines(expressions))
-    lines.extend(["", "## 待复核点 / 低置信内容", ""])
+    lines.extend(["", numbered_summary_heading("关键观点 / 方法论", number="5"), ""])
+    lines.extend(_snippet_lines(key_points, fallback="暂无足够稳定的观点句，请回看完整逐字稿。", numbering_prefix="5.1"))
+    lines.extend(["", numbered_summary_heading("证据引用 / Citation Digest", number="6"), ""])
+    lines.extend(_citation_lines(citations, numbering_prefix="6.1"))
+    lines.extend(["", numbered_summary_heading("可执行动作清单"), ""])
+    lines.extend(_action_lines(actions, numbering_prefix="7.1"))
+    lines.extend(["", numbered_summary_heading("高频话术 / 可复用表达", number="8"), ""])
+    lines.extend(_expression_lines(expressions, numbering_prefix="8.1"))
+    lines.extend(["", numbered_summary_heading("待复核点 / 低置信内容", number="9"), ""])
     lines.extend(_local_review_lines(pack, visual_digest, term_summary, transcript_semantic))
     summary_text = "\n".join(lines).rstrip() + "\n"
     return apply_term_replacement_pairs(summary_text, load_bundle_term_replacements(root))
@@ -1340,7 +1367,7 @@ def _local_chunk_summary_lines(chunks: list[dict[str, Any]], visual_digest: dict
         summary = _chunk_summary_text(chunk, max_sentences=3, max_chars=260)
         visual_note = _chunk_visual_note(chunk) or _visual_note_for_chunk(chunk, visual_digest or {})
         lines.extend([
-            f"### `{format_timestamp(chunk['start'])} - {format_timestamp(chunk['end'])}` 第 {idx} 段",
+            f"### 4.1.{idx} `{format_timestamp(chunk['start'])} - {format_timestamp(chunk['end'])}` {str(chunk.get('title') or '内容段').strip()}",
             "",
         ])
         if visual_note:
@@ -1434,23 +1461,26 @@ def _select_ranked_snippets(segments: list[dict[str, Any]], keywords: tuple[str,
     return _dedupe_snippets(selected)[:target]
 
 
-def _snippet_lines(rows: list[dict[str, Any]], *, fallback: str) -> list[str]:
+def _snippet_lines(rows: list[dict[str, Any]], *, fallback: str, numbering_prefix: str = "") -> list[str]:
     if not rows:
-        return [f"- {fallback}"]
+        prefix = f"{numbering_prefix}.1 " if numbering_prefix else ""
+        return [f"- {prefix}{fallback}"]
     lines: list[str] = []
-    for row in rows:
+    for index, row in enumerate(rows, start=1):
         text = _clean_llm_main_text(row.get("text"), limit=150)
         if text:
-            lines.append(f"- `{_time_label(row)}` {text}")
-    return lines or [f"- {fallback}"]
+            prefix = f"{numbering_prefix}.{index} " if numbering_prefix else ""
+            lines.append(f"- {prefix}`{_time_label(row)}` {text}")
+    return lines or [f"- {(numbering_prefix + '.1 ') if numbering_prefix else ''}{fallback}"]
 
 
 
-def _citation_lines(rows: list[dict[str, Any]]) -> list[str]:
+def _citation_lines(rows: list[dict[str, Any]], numbering_prefix: str = "") -> list[str]:
     if not rows:
-        return ["- 暂无可用 citation digest；最终总结仍需回到 smart-summary-chapters.md / full-transcript.md 核对证据。"]
+        prefix = f"{numbering_prefix}.1 " if numbering_prefix else ""
+        return [f"- {prefix}暂无可用 citation digest；最终总结仍需回到 smart-summary-chapters.md / full-transcript.md 核对证据。"]
     lines = ["这些引用来自章节级 `citation_digest`，用于把总结观点回链到转写、画面、OCR/ebook、连续片段或待复核缺口；它们是证据导航，不等于事实已确认。", ""]
-    for row in rows:
+    for index, row in enumerate(rows, start=1):
         source_type = str(row.get("source_type") or "evidence")
         time = str(row.get("time") or "")
         timeline = ",".join(str(value) for value in row.get("timeline_indexes") or [])
@@ -1461,32 +1491,37 @@ def _citation_lines(rows: list[dict[str, Any]]) -> list[str]:
         if evidence:
             suffix.append(f"evidence={evidence}")
         suffix_text = "；" + "；".join(suffix) if suffix else ""
-        lines.append(f"- `{time}` `{source_type}` {row.get('text')}{suffix_text}")
+        prefix = f"{numbering_prefix}.{index} " if numbering_prefix else ""
+        lines.append(f"- {prefix}`{time}` `{source_type}` {row.get('text')}{suffix_text}")
     return lines
 
-def _action_lines(rows: list[dict[str, Any]]) -> list[str]:
+def _action_lines(rows: list[dict[str, Any]], numbering_prefix: str = "") -> list[str]:
     if not rows:
-        return ["- 回看完整逐字稿，先人工标出可执行步骤，再补进动作清单。"]
+        prefix = f"{numbering_prefix}.1 " if numbering_prefix else ""
+        return [f"- {prefix}回看完整逐字稿，先人工标出可执行步骤，再补进动作清单。"]
     lines = []
-    for row in rows:
+    for index, row in enumerate(rows, start=1):
         text = _clean_llm_main_text(row.get("text"), limit=150)
         if not text:
             continue
         if not text.startswith(("先", "把", "用", "记录", "准备", "确认", "整理", "复盘", "避免", "建立")):
             text = "落实这一点：" + text
-        lines.append(f"- `{_time_label(row)}` {text}")
-    return lines or ["- 回看完整逐字稿，先人工标出可执行步骤，再补进动作清单。"]
+        prefix = f"{numbering_prefix}.{index} " if numbering_prefix else ""
+        lines.append(f"- {prefix}`{_time_label(row)}` {text}")
+    return lines or [f"- {(numbering_prefix + '.1 ') if numbering_prefix else ''}回看完整逐字稿，先人工标出可执行步骤，再补进动作清单。"]
 
 
-def _expression_lines(rows: list[dict[str, Any]]) -> list[str]:
+def _expression_lines(rows: list[dict[str, Any]], numbering_prefix: str = "") -> list[str]:
     if not rows:
-        return ["- 暂未抽出稳定话术；建议人工从逐字稿中挑选原句。"]
+        prefix = f"{numbering_prefix}.1 " if numbering_prefix else ""
+        return [f"- {prefix}暂未抽出稳定话术；建议人工从逐字稿中挑选原句。"]
     lines = ["以下是从转写中整理出的可复述表达，发布或引用前建议回看原视频核对原话："]
-    for row in rows:
+    for index, row in enumerate(rows, start=1):
         text = _clean_llm_main_text(row.get("text"), limit=150)
         if text:
-            lines.append(f"- `{_time_label(row)}` “{text}”")
-    return lines if len(lines) > 1 else ["- 暂未抽出稳定话术；建议人工从逐字稿中挑选原句。"]
+            prefix = f"{numbering_prefix}.{index} " if numbering_prefix else ""
+            lines.append(f"- {prefix}`{_time_label(row)}` “{text}”")
+    return lines if len(lines) > 1 else [f"- {(numbering_prefix + '.1 ') if numbering_prefix else ''}暂未抽出稳定话术；建议人工从逐字稿中挑选原句。"]
 
 
 def _time_label(row: dict[str, Any]) -> str:
@@ -1922,8 +1957,40 @@ def _compact_quality_text(value: str) -> str:
 
 def _quality_number_evidence(value: str) -> dict[str, set[str]]:
     without_times = re.sub(r"\b\d{1,2}:\d{2}(?::\d{2})?(?:\.\d{1,3})?\b", "", str(value or ""))
-    without_list_ordinals = re.sub(r"(?m)^\s*\d+(?:[.)]\s+|、\s*)", "", without_times)
+    without_heading_numbers = re.sub(
+        r"(?m)^(\s{0,3}#{1,6}\s+)\d{1,2}(?:\.\d+)*(?:(?:[.)、:：-])\s*|\s+)",
+        r"\1",
+        without_times,
+    )
+    without_list_ordinals = re.sub(r"(?m)^\s*\d+(?:[.)]\s+|、\s*)", "", without_heading_numbers)
     return number_evidence_map(without_list_ordinals)
+
+
+def _structural_heading_numbers(value: str) -> list[str]:
+    return sorted(
+        {
+            match.group(1)
+            for match in re.finditer(
+                r"(?m)^\s{0,3}#{1,6}\s+(\d{1,2})(?:(?:[.)、:：-])\s*|\s+)",
+                str(value or ""),
+            )
+        },
+        key=int,
+    )
+
+
+def _resolve_summary_path(root: Path, value: str | Path) -> Path:
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        path = root / path
+    return path.resolve()
+
+
+def _normalize_markdown_newlines(value: str) -> str:
+    text = str(value or "")
+    if text.count("\n") <= 1 and "\\n" in text:
+        return text.replace("\\r\\n", "\n").replace("\\n", "\n")
+    return text
 
 
 def _number_display_mentions(mentions: set[str]) -> list[str]:
@@ -2337,13 +2404,17 @@ def _timestamps(text: str) -> list[float]:
 
 
 def _section_text(text: str, heading: str) -> str:
-    start = text.find(heading)
-    if start < 0:
+    prefix, title = heading.split(" ", 1)
+    pattern = re.compile(
+        rf"(?m)^{re.escape(prefix)}\s+(?:\d+(?:\.\d+)*[.)、]?\s+)?{re.escape(title.strip())}(?:\s+/.*)?\s*$"
+    )
+    match = pattern.search(text)
+    if not match:
         return ""
-    next_match = re.search(r"\n## ", text[start + len(heading) :])
+    next_match = re.search(r"\n##\s+", text[match.end() :])
     if not next_match:
-        return text[start + len(heading) :]
-    return text[start + len(heading) : start + len(heading) + next_match.start()]
+        return text[match.end() :]
+    return text[match.end() : match.end() + next_match.start()]
 
 
 def _section_coverage(text: str, transcript_max: float, *, interview_profile: bool = False) -> dict[str, Any]:

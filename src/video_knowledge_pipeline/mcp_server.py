@@ -40,6 +40,7 @@ from .extractor_execution import extractor_run_log as extractor_run_log_impl
 from .extractor_execution import run_extractor_plan as run_extractor_plan_impl
 from .external_capability_pack import build_external_capability_pack as build_external_capability_pack_impl
 from .general_tagger_adapter import general_tagger_status as general_tagger_status_impl, run_general_tagger as run_general_tagger_impl
+from .temporal_tag_delta import run_temporal_tag_delta as run_temporal_tag_delta_impl
 from .highlight_detection_adapter import run_highlight_detection as run_highlight_detection_impl
 from .high_res_tile_plan import run_high_res_tile_plan as run_high_res_tile_plan_impl
 from .tile_result_import_builder import build_tile_result_import as build_tile_result_import_impl
@@ -1799,6 +1800,7 @@ def main() -> None:
         vision_retry_delay_seconds: float = 0.0,
         execution_actor: str = "agent",
         export_consent: str | None = None,
+        max_tokens: int | None = None,
     ) -> dict[str, Any]:
         return run_multimodal_frame_analysis_impl(
             bundle_dir,
@@ -1815,6 +1817,7 @@ def main() -> None:
             vision_retry_delay_seconds=vision_retry_delay_seconds,
             execution_actor=execution_actor,
             export_consent=export_consent,
+            max_tokens=max_tokens,
         )
 
     @server.tool()
@@ -1833,6 +1836,7 @@ def main() -> None:
         vision_retry_delay_seconds: float = 0.0,
         execution_actor: str = "agent",
         export_consent: str | None = None,
+        max_tokens: int | None = None,
     ) -> dict[str, Any]:
         return run_multimodal_frame_analysis_impl(
             bundle_dir,
@@ -1849,6 +1853,7 @@ def main() -> None:
             vision_retry_delay_seconds=vision_retry_delay_seconds,
             execution_actor=execution_actor,
             export_consent=export_consent,
+            max_tokens=max_tokens,
         )
 
     @server.tool()
@@ -1908,6 +1913,7 @@ def main() -> None:
         vision_retry_delay_seconds: float = 0.0,
         execution_actor: str = "agent",
         export_consent: str | None = None,
+        max_tokens: int | None = None,
     ) -> dict[str, Any]:
         return run_temporal_visual_analysis_impl(
             bundle_dir,
@@ -1925,6 +1931,7 @@ def main() -> None:
             vision_retry_delay_seconds=vision_retry_delay_seconds,
             execution_actor=execution_actor,
             export_consent=export_consent,
+            max_tokens=max_tokens,
         )
 
     @server.tool()
@@ -1944,6 +1951,7 @@ def main() -> None:
         vision_retry_delay_seconds: float = 0.0,
         execution_actor: str = "agent",
         export_consent: str | None = None,
+        max_tokens: int | None = None,
     ) -> dict[str, Any]:
         return run_temporal_visual_analysis_impl(
             bundle_dir,
@@ -1961,6 +1969,7 @@ def main() -> None:
             vision_retry_delay_seconds=vision_retry_delay_seconds,
             execution_actor=execution_actor,
             export_consent=export_consent,
+            max_tokens=max_tokens,
         )
 
     @server.tool()
@@ -2324,6 +2333,32 @@ def main() -> None:
             execute_ocr=execute_ocr,
             execute_tiles=execute_tiles,
             allow_online_review=allow_online_review,
+            write=write,
+        )
+
+    @server.tool()
+    def run_temporal_tag_delta(
+        bundle_dir: str,
+        input_json: str = "",
+        execute_tagger: bool = False,
+        source_root: str = "",
+        checkpoint_path: str = "",
+        device: str = "cuda",
+        prefer_language: str = "zh",
+        limit: int = 0,
+        min_frames: int = 3,
+        write: bool = True,
+    ) -> dict[str, Any]:
+        return run_temporal_tag_delta_impl(
+            bundle_dir,
+            input_json=input_json or None,
+            execute_tagger=execute_tagger,
+            source_root=source_root or None,
+            checkpoint_path=checkpoint_path or None,
+            device=device,
+            prefer_language=prefer_language,
+            limit=limit,
+            min_frames=min_frames,
             write=write,
         )
 
@@ -3536,6 +3571,7 @@ def main() -> None:
         device: str = "cuda",
         prefer_language: str = "zh",
         limit: int = 0,
+        frame_mode: str = "representative",
         execute: bool = False,
         import_annotations: bool = True,
         write: bool = True,
@@ -3547,6 +3583,7 @@ def main() -> None:
             device=device,
             prefer_language=prefer_language,
             limit=limit,
+            frame_mode=frame_mode,
             execute=execute,
             import_annotations=import_annotations,
             write=write,

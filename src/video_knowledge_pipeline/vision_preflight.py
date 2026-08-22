@@ -98,6 +98,8 @@ def vision_execution_preflight(
         }
     )
     provider_public = dict(provider_health.get("provider") or {}) or {"provider": cfg.get("provider"), "base_url": provider_diagnostics.get("base_url") or cfg.get("base_url"), "model": cfg.get("model"), "api_key_configured": bool(cfg.get("api_key")), "timeout_seconds": cfg.get("timeout_seconds")}
+    provider_public["config_source"] = provider_config_source
+    provider_public["effective"] = True
     expected_calls = len(semantic_selected) + len(temporal_selected)
     confirmation = {
         "confirm_vision_calls": expected_calls,
@@ -118,13 +120,26 @@ def vision_execution_preflight(
     )
     for task in missing_gateway_routes:
         blockers.append({"key": "gateway_route_missing", "message": f"No route-based gateway profile is configured for {task}; legacy fallback is blocked."})
+    ready_for_confirmed_execution = not blockers
+    provider_health_verified = provider_health.get("safe_to_execute") is True
+    route_profile_rows = []
+    for item in route_profiles.values():
+        row = {key: value for key, value in item.items() if key != "provider_config"}
+        row["usage"] = (
+            "active"
+            if use_route_gateway
+            else "unused_explicit_or_matrix_provider_selected"
+        )
+        route_profile_rows.append(row)
     preflight = {
         "schema": "lecture_vision_execution_preflight.v1",
         "bundle_dir": str(root),
         "manifest_path": str(manifest_path),
         "provider": provider_public,
+        "effective_provider": provider_public,
         "recommended_provider_config": matrix_recommended_config,
-        "route_based_gateway_profiles": [{key: value for key, value in item.items() if key != "provider_config"} for item in route_profiles.values()],
+        "route_based_gateway_profiles": route_profile_rows,
+        "remote_fallback_disabled": bool(provider_config is not None),
         "provider_diagnostics": provider_diagnostics,
         "execution_profile": {
             "provider_config_source": provider_config_source,
@@ -161,7 +176,15 @@ def vision_execution_preflight(
         },
         "restore_chain": restore_ready,
         "provider_health": provider_health,
-        "ready_to_execute": not blockers,
+        "provider_health_required": bool(check_provider),
+        "provider_health_verified": provider_health_verified,
+        "ready_for_confirmed_execution": ready_for_confirmed_execution,
+        "ready_to_execute": ready_for_confirmed_execution,
+        "readiness_scope": (
+            "configuration_confirmation_and_provider_health"
+            if check_provider
+            else "configuration_and_confirmation_only_provider_health_not_checked"
+        ),
         "blockers": blockers,
         "commands": _commands(
             root,
@@ -254,6 +277,8 @@ def render_vision_execution_preflight_markdown(preflight: dict[str, Any]) -> str
         f"- Bundle: `{preflight.get('bundle_dir', '')}`",
         f"- Provider: `{provider.get('provider', '')}` / `{provider.get('model', '')}`",
         f"- Provider config source: `{execution_profile.get('provider_config_source', '')}`",
+        f"- Effective provider: `{provider.get('provider', '')}` / `{provider.get('base_url', '')}`",
+        f"- Remote fallback disabled: `{preflight.get('remote_fallback_disabled', False)}`",
         f"- Matrix recommended config: `{recommended}`",
         f"- API key configured: `{provider.get('api_key_configured', False)}`",
         f"- Route ID: `{provider.get('route_id', '')}` / revision: `{provider.get('route_revision', '')}`",
@@ -261,11 +286,14 @@ def render_vision_execution_preflight_markdown(preflight: dict[str, Any]) -> str
         f"- Gateway ready: `{provider.get('gateway_ready', False)}`",
         f"- DPAPI credential ready: `{provider.get('credential_ready', False)}` / `{provider.get('credential_status', '')}`",
         f"- Provider health: `{provider_health.get('status', 'not_checked')}`",
+        f"- Provider health required: `{preflight.get('provider_health_required', False)}`",
+        f"- Provider health verified: `{preflight.get('provider_health_verified', False)}`",
         f"- Provider safe to execute: `{provider_health.get('safe_to_execute', None)}`",
         f"- Provider error class: `{provider_health.get('error_class', '')}`",
         f"- Endpoint kind: `{provider_diagnostics.get('endpoint_kind', '')}`",
         f"- Request URL: `{provider_diagnostics.get('request_url', '')}`",
-        f"- Ready to execute: `{preflight.get('ready_to_execute', False)}`",
+        f"- Ready for confirmed execution: `{preflight.get('ready_for_confirmed_execution', False)}`",
+        f"- Readiness scope: `{preflight.get('readiness_scope', '')}`",
         f"- Expected API calls: `{preflight.get('expected_api_calls', 0)}`",
         f"- Confirm calls: `{(preflight.get('confirmation') or {}).get('confirm_vision_calls', 0)}`",
         f"- Confirm indexes: `{(preflight.get('confirmation') or {}).get('confirm_vision_indexes', '')}`",
@@ -543,25 +571,25 @@ def _commands(
     confirmation: dict[str, Any],
 ) -> dict[str, str]:
     commands = {
-        "test_provider": f"python -m video_knowledge_pipeline.cli test-vision-provider --image-paths \"{root / 'assets' / '0001-001_0000000000ms.jpg'}\"",
-        "inspect_runs": f"python -m video_knowledge_pipeline.cli vision-analysis-run-log \"{root}\"",
-        "plan_restore": f"python -m video_knowledge_pipeline.cli vision-analysis-restore-plan \"{root}\" --run-id <run_id>",
+        "test_provider": f".\\scripts\\video-knowledge.ps1 test-vision-provider --image-paths \"{root / 'assets' / '0001-001_0000000000ms.jpg'}\"",
+        "inspect_runs": f".\\scripts\\video-knowledge.ps1 vision-analysis-run-log \"{root}\"",
+        "plan_restore": f".\\scripts\\video-knowledge.ps1 vision-analysis-restore-plan \"{root}\" --run-id <run_id>",
     }
     if include_semantic and semantic_selected:
         index_arg = f" --indexes {','.join(str(index) for index in semantic_indexes)}" if semantic_indexes else ""
         selected_arg = f" --indexes {','.join(str(index) for index in semantic_selected)}"
-        commands["run_semantic"] = f"python -m video_knowledge_pipeline.cli run-multimodal-frame-analysis \"{root}\" --execute --limit {semantic_limit}{index_arg}"
+        commands["run_semantic"] = f".\\scripts\\video-knowledge.ps1 run-multimodal-frame-analysis \"{root}\" --execute --limit {semantic_limit}{index_arg}"
         commands["confirmed_run_semantic"] = (
-            f"python -m video_knowledge_pipeline.cli run-multimodal-frame-analysis \"{root}\" --execute --limit {semantic_limit}{selected_arg}"
+            f".\\scripts\\video-knowledge.ps1 run-multimodal-frame-analysis \"{root}\" --execute --limit {semantic_limit}{selected_arg}"
             f" --confirm-vision-calls {confirmation.get('semantic_confirm_vision_calls', 0)}"
             f" --confirm-vision-indexes \"{confirmation.get('semantic_confirm_vision_indexes', '')}\""
         )
     if include_temporal and temporal_selected:
         index_arg = f" --indexes {','.join(str(index) for index in temporal_indexes)}" if temporal_indexes else ""
         selected_arg = f" --indexes {','.join(str(index) for index in temporal_selected)}"
-        commands["run_temporal"] = f"python -m video_knowledge_pipeline.cli run-temporal-visual-analysis \"{root}\" --execute --frame-count {frame_count} --limit {temporal_limit}{index_arg}"
+        commands["run_temporal"] = f".\\scripts\\video-knowledge.ps1 run-temporal-visual-analysis \"{root}\" --execute --frame-count {frame_count} --limit {temporal_limit}{index_arg}"
         commands["confirmed_run_temporal"] = (
-            f"python -m video_knowledge_pipeline.cli run-temporal-visual-analysis \"{root}\" --execute --frame-count {frame_count} --limit {temporal_limit}{selected_arg}"
+            f".\\scripts\\video-knowledge.ps1 run-temporal-visual-analysis \"{root}\" --execute --frame-count {frame_count} --limit {temporal_limit}{selected_arg}"
             f" --confirm-vision-calls {confirmation.get('temporal_confirm_vision_calls', 0)}"
             f" --confirm-vision-indexes \"{confirmation.get('temporal_confirm_vision_indexes', '')}\""
         )

@@ -73,6 +73,7 @@ def run_general_tagger(
     device: str = "cuda",
     prefer_language: str = "zh",
     limit: int = 0,
+    frame_mode: str = "representative",
     execute: bool = False,
     import_annotations: bool = True,
     write: bool = True,
@@ -84,6 +85,8 @@ def run_general_tagger(
         raise ValueError("device must be auto, cpu, or cuda")
     if prefer_language not in {"zh", "en"}:
         raise ValueError("prefer_language must be zh or en")
+    if frame_mode not in {"representative", "continuous"}:
+        raise ValueError("frame_mode must be representative or continuous")
     root = Path(bundle_dir).expanduser().resolve()
     timeline_path = root / "timeline.json"
     if not timeline_path.exists():
@@ -95,7 +98,7 @@ def run_general_tagger(
     setup = general_tagger_status(source_root=source_root, checkpoint_path=checkpoint_path)
     source = _source_root(source_root)
     checkpoint = _checkpoint(checkpoint_path)
-    frames = _bundle_frames(root, timeline)
+    frames = _bundle_frames(root, timeline, frame_mode=frame_mode)
     if int(limit) > 0:
         frames = frames[: int(limit)]
     status = "planned"
@@ -127,6 +130,8 @@ def run_general_tagger(
                             "schema": "video_knowledge_pipeline.tagger_annotation.v1",
                             "index": frame["timeline_index"],
                             "timeline_index": frame["timeline_index"],
+                            "frame_position": frame["frame_position"],
+                            "frame_id": frame["frame_id"],
                             "start": frame["start"],
                             "end": frame["end"],
                             "tags": selected,
@@ -160,6 +165,7 @@ def run_general_tagger(
         "checkpoint_path": str(checkpoint or ""),
         "device": device,
         "prefer_language": prefer_language,
+        "frame_mode": frame_mode,
         "planned_frame_count": len(frames),
         "annotation_count": len(annotations),
         "annotations": annotations,
@@ -251,12 +257,21 @@ def _ram_plus_backend(
     return infer
 
 
-def _bundle_frames(root: Path, timeline: list[Any]) -> list[dict[str, Any]]:
+def _bundle_frames(
+    root: Path,
+    timeline: list[Any],
+    *,
+    frame_mode: str = "representative",
+) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
     for position, item in enumerate(timeline, start=1):
         if not isinstance(item, dict):
             continue
-        values = item.get("frame_paths") if isinstance(item.get("frame_paths"), list) else []
+        values = (
+            item.get("temporal_frame_paths")
+            if frame_mode == "continuous" and isinstance(item.get("temporal_frame_paths"), list)
+            else item.get("frame_paths") if isinstance(item.get("frame_paths"), list) else []
+        )
         if not values and isinstance(item.get("evidence_frame_paths"), list):
             values = item["evidence_frame_paths"]
         integrated = item.get("integrated_visual") if isinstance(item.get("integrated_visual"), dict) else {}
@@ -264,28 +279,39 @@ def _bundle_frames(root: Path, timeline: list[Any]) -> list[dict[str, Any]]:
             values = integrated["evidence_frame_paths"]
         if not values and item.get("frame_path"):
             values = [item["frame_path"]]
-        frame = _first_image(root, values)
-        if frame is None:
+        frames = _image_paths(root, values)
+        if frame_mode == "representative":
+            frames = frames[:1]
+        if not frames:
             continue
-        result.append(
-            {
-                "timeline_index": _int(item.get("index")) or position,
-                "start": _float(item.get("start")),
-                "end": _float(item.get("end")),
-                "frame_path": frame,
-            }
-        )
+        for frame_position, frame in enumerate(frames, start=1):
+            result.append(
+                {
+                    "timeline_index": _int(item.get("index")) or position,
+                    "start": _float(item.get("start")),
+                    "end": _float(item.get("end")),
+                    "frame_position": frame_position,
+                    "frame_id": f"frame-{frame_position:03d}",
+                    "frame_path": frame,
+                }
+            )
     return result
 
 
-def _first_image(root: Path, values: list[Any]) -> Path | None:
+def _image_paths(root: Path, values: list[Any]) -> list[Path]:
+    result: list[Path] = []
+    seen: set[str] = set()
     for value in values:
         path = Path(str(value)).expanduser()
         if not path.is_absolute():
             path = root / path
         if path.exists() and path.is_file() and path.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp", ".bmp"}:
-            return path.resolve()
-    return None
+            resolved = path.resolve()
+            key = str(resolved).casefold()
+            if key not in seen:
+                seen.add(key)
+                result.append(resolved)
+    return result
 
 
 def _source_root(

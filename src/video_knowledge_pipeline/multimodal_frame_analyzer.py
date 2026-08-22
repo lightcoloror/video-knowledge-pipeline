@@ -25,6 +25,7 @@ from .vision_execution_route import resolve_vision_task_execution_route
 from .vision_export_consent import validate_vision_export_consent, vision_export_consent_image_limits
 from .vision_preflight import vision_execution_preflight
 from .visual_integration import integrated_visual
+from .visual_evidence import evidence_index_sets
 from .vlm_preprocess import prepare_image_probe
 
 
@@ -152,7 +153,22 @@ def run_multimodal_frame_analysis(
             cfg = {**cfg, "consent_id": consent_id}
 
     batch_abort_error = ""
-    for candidate in candidates:
+    progress = _new_vision_batch_progress(
+        root,
+        kind="semantic_frame",
+        candidates=candidates,
+        execute=execute,
+        gate=gate,
+    )
+    for position, candidate in enumerate(candidates, start=1):
+        _write_vision_batch_progress(
+            root,
+            progress,
+            results=results,
+            current_index=_int_value(candidate.get("index")),
+            current_position=position,
+            status="running" if execute and not gate else "blocked" if gate else "planned",
+        )
         result = {
             "index": candidate["index"],
             "visual_route": candidate.get("visual_route"),
@@ -174,8 +190,17 @@ def run_multimodal_frame_analysis(
             result["error"] = batch_abort_error
             result["batch_aborted"] = True
             results.append(result)
+            _write_vision_batch_progress(
+                root,
+                progress,
+                results=results,
+                current_index=_int_value(candidate.get("index")),
+                current_position=position,
+                status="running",
+            )
             continue
         if execute and not gate and candidate.get("frame_paths"):
+            item_started = time.perf_counter()
             original_image_paths = [_resolve_frame(root, path) for path in candidate.get("frame_paths", [])[:1]]
             image_probe = prepare_image_probe(
                 original_image_paths,
@@ -215,6 +240,8 @@ def run_multimodal_frame_analysis(
                     "request_max_tokens": response.get("request_max_tokens", max_tokens),
                     "request_max_tokens_omitted": bool(response.get("request_max_tokens_omitted", max_tokens is None)),
                     "finish_reason": str(response.get("finish_reason") or ""),
+                    "response_chars": len(str(response.get("content") or "")),
+                    "elapsed_ms": round((time.perf_counter() - item_started) * 1000.0, 3),
                     "truncated": truncated,
                     "complete": complete,
                 }
@@ -228,10 +255,44 @@ def run_multimodal_frame_analysis(
                 batch_abort_error = _batch_abort_error(str(response.get("error") or ""))
                 result["batch_abort_trigger"] = True
         results.append(result)
+        _write_vision_batch_progress(
+            root,
+            progress,
+            results=results,
+            current_index=_int_value(candidate.get("index")),
+            current_position=position,
+            status="running" if execute and not gate else "blocked" if gate else "planned",
+        )
 
     run_status = str(gate.get("status") or "ok") if gate else "ok"
     if batch_abort_error:
         run_status = "vision_batch_aborted"
+    elif execute and not gate:
+        run_status = _vision_batch_execution_status(results)
+    evidence_indexes = evidence_index_sets(timeline)
+    run_complete_indexes = sorted(
+        {
+            int(item.get("index"))
+            for item in results
+            if item.get("complete") and _int_value(item.get("index")) > 0
+        }
+    )
+    run_truncated_indexes = sorted(
+        {
+            int(item.get("index"))
+            for item in results
+            if item.get("truncated") and _int_value(item.get("index")) > 0
+        }
+    )
+    run_failed_indexes = sorted(
+        {
+            int(item.get("index"))
+            for item in results
+            if item.get("executed") and not item.get("ok") and _int_value(item.get("index")) > 0
+        }
+    )
+    timeline_complete_indexes = evidence_indexes["visual_model_complete"]
+    export_consumable_indexes = evidence_indexes["visual_export_consumable"]
     summary = {
         "schema": "lecture_multimodal_frame_analysis_summary.v1",
         "total": len(all_candidates),
@@ -257,6 +318,16 @@ def run_multimodal_frame_analysis(
         "complete_count": sum(1 for item in results if item.get("complete")),
         "truncated_count": sum(1 for item in results if item.get("truncated")),
         "failed_count": sum(1 for item in results if item.get("executed") and not item.get("ok")),
+        "run_complete_indexes": run_complete_indexes,
+        "run_truncated_indexes": run_truncated_indexes,
+        "run_failed_indexes": run_failed_indexes,
+        "timeline_complete_count": len(timeline_complete_indexes),
+        "timeline_complete_indexes": timeline_complete_indexes,
+        "export_consumable_count": len(export_consumable_indexes),
+        "export_consumable_indexes": export_consumable_indexes,
+        "run_complete_not_consumable_indexes": sorted(
+            set(run_complete_indexes) - set(export_consumable_indexes)
+        ),
         "imported": len(imported),
         "updated": len(set(applied)),
         "provider": {
@@ -270,6 +341,15 @@ def run_multimodal_frame_analysis(
         },
         "updated_at": now_iso(),
     }
+    progress_path = _write_vision_batch_progress(
+        root,
+        progress,
+        results=results,
+        current_index=0,
+        current_position=len(candidates),
+        status=run_status,
+    )
+    summary["progress_path"] = str(progress_path)
     manifest["multimodal_frame_analysis"] = {
         "schema": "lecture_multimodal_frame_analysis.v1",
         "count": len(all_candidates),
@@ -322,6 +402,7 @@ def run_multimodal_frame_analysis(
         "run_audit": run_audit,
         "run_registry": run_registry,
         "post_run_refresh": post_run_refresh,
+        "progress_path": str(progress_path),
         "vision_restore_hint": restore_hint,
         "summary": summary,
         "items": results,
@@ -404,6 +485,8 @@ def _vision_run_registry_status(summary: dict[str, Any], results: list[dict[str,
     if selected_count <= 0:
         return "not_needed"
     gate_status = str(summary.get("status") or "ok")
+    if gate_status in {"partial_failure", "failed", "vision_batch_aborted"}:
+        return "needs_retry"
     if gate_status not in {"", "ok"}:
         return "needs_input"
     if not bool(summary.get("execute")) and int(summary.get("imported") or 0) <= 0:
@@ -415,6 +498,17 @@ def _vision_run_registry_status(summary: dict[str, Any], results: list[dict[str,
     if bool(summary.get("execute")):
         return "needs_retry"
     return "needs_execution"
+
+
+def _vision_batch_execution_status(results: list[dict[str, Any]]) -> str:
+    executed = [row for row in results if isinstance(row, dict) and row.get("executed")]
+    if not executed:
+        return "not_needed"
+    failed_count = sum(1 for row in executed if not row.get("ok"))
+    complete_count = sum(1 for row in executed if row.get("complete"))
+    if failed_count <= 0:
+        return "ok"
+    return "partial_failure" if complete_count > 0 else "failed"
 
 
 def _vision_run_failed_items(summary: dict[str, Any], results: list[dict[str, Any]], *, execute: bool) -> list[dict[str, Any]]:
@@ -469,7 +563,9 @@ def call_vision_model_with_retries(
         if response.get("ok") or not _is_retryable_vision_error(error) or attempt >= max_attempts:
             break
         if float(delay_seconds or 0) > 0:
-            time.sleep(float(delay_seconds or 0))
+            retry_delay = float(delay_seconds or 0) * (2 ** (attempt - 1))
+            rows[-1]["retry_delay_seconds"] = retry_delay
+            time.sleep(retry_delay)
     response = dict(response)
     response["attempts"] = rows
     response["attempt_count"] = len(rows)
@@ -577,7 +673,99 @@ def _refresh_post_vision_outputs(root: Path, *, updated_count: int) -> dict[str,
     result["controlled_execution_check_path"] = controlled.get("report_path", "")
     result["controlled_execution_check_markdown_path"] = controlled.get("report_markdown_path", "")
     result["ready_for_real_vision_execution"] = bool(controlled.get("ready_for_real_vision_execution"))
+    freshness_receipt = {
+        "schema": "video_knowledge_pipeline.knowledge_export_freshness_receipt.v1",
+        "status": "stale",
+        "reason": "timeline_visual_evidence_updated_after_last_export",
+        "updated_timeline_item_count": int(updated_count),
+        "automatic_export_performed": False,
+        "recovery_command": f".\\scripts\\video-knowledge.ps1 export-knowledge-note {_quote_ps_path(root)}",
+        "written_at": now_iso(),
+    }
+    freshness_path = root / "knowledge-export-freshness.json"
+    write_json(freshness_path, freshness_receipt)
+    result["knowledge_export_freshness"] = "stale"
+    result["knowledge_export_freshness_path"] = str(freshness_path)
+    result["knowledge_export_recovery_command"] = freshness_receipt["recovery_command"]
     return result
+
+
+def _new_vision_batch_progress(
+    root: Path,
+    *,
+    kind: str,
+    candidates: list[dict[str, Any]],
+    execute: bool,
+    gate: dict[str, Any] | None,
+) -> dict[str, Any]:
+    progress = {
+        "schema": "video_knowledge_pipeline.vision_batch_progress.v1",
+        "kind": kind,
+        "bundle_dir": str(root),
+        "execute": bool(execute),
+        "status": "blocked" if gate else "running" if execute else "planned",
+        "total": len(candidates),
+        "selected_indexes": [
+            _int_value(row.get("index"))
+            for row in candidates
+            if isinstance(row, dict) and _int_value(row.get("index")) > 0
+        ],
+        "current_index": 0,
+        "current_position": 0,
+        "processed_count": 0,
+        "complete_count": 0,
+        "truncated_count": 0,
+        "failed_count": 0,
+        "started_at": now_iso(),
+        "updated_at": now_iso(),
+        "elapsed_seconds": 0.0,
+        "_started_perf_counter": time.perf_counter(),
+    }
+    _write_vision_batch_progress(root, progress, results=[], status=str(progress["status"]))
+    return progress
+
+
+def _write_vision_batch_progress(
+    root: Path,
+    progress: dict[str, Any],
+    *,
+    results: list[dict[str, Any]],
+    current_index: int = 0,
+    current_position: int = 0,
+    status: str,
+) -> Path:
+    progress.update(
+        {
+            "status": str(status or "unknown"),
+            "current_index": max(0, int(current_index or 0)),
+            "current_position": max(0, int(current_position or 0)),
+            "processed_count": len(results),
+            "complete_count": sum(1 for row in results if row.get("complete")),
+            "truncated_count": sum(1 for row in results if row.get("truncated")),
+            "failed_count": sum(
+                1 for row in results if row.get("executed") and not row.get("ok")
+            ),
+            "updated_at": now_iso(),
+            "elapsed_seconds": round(
+                time.perf_counter() - float(progress.get("_started_perf_counter") or time.perf_counter()),
+                3,
+            ),
+        }
+    )
+    kind = str(progress.get("kind") or "vision").replace("_", "-")
+    path = root / f"{kind}-analysis-progress.json"
+    write_json(path, {key: value for key, value in progress.items() if not key.startswith("_")})
+    if progress.get("execute"):
+        print(
+            "[vkp][vision-progress] "
+            f"kind={progress.get('kind')} status={progress.get('status')} "
+            f"position={progress.get('current_position')}/{progress.get('total')} "
+            f"index={progress.get('current_index') or '-'} "
+            f"complete={progress.get('complete_count')} "
+            f"truncated={progress.get('truncated_count')} failed={progress.get('failed_count')}",
+            flush=True,
+        )
+    return path
 
 
 def vision_analysis_run_log(bundle_dir: str | Path) -> dict[str, Any]:
@@ -585,14 +773,71 @@ def vision_analysis_run_log(bundle_dir: str | Path) -> dict[str, Any]:
     jsonl_path = root / "vision-analysis-runs.jsonl"
     markdown_path = root / "vision-analysis-runs.md"
     rows = read_jsonl(jsonl_path) if jsonl_path.exists() else []
+    reconciliation = _vision_run_log_reconciliation(root, rows)
     return {
         "bundle_dir": str(root),
         "jsonl_path": str(jsonl_path),
         "markdown_path": str(markdown_path),
         "count": len(rows),
         "last_run": rows[-1] if rows else {},
+        "reconciliation": reconciliation,
         "runs": rows,
     }
+
+
+def _vision_run_log_reconciliation(root: Path, rows: list[dict[str, Any]]) -> dict[str, Any]:
+    timeline = _read_timeline(root) if (root / "timeline.json").is_file() else []
+    evidence_indexes = evidence_index_sets(timeline)
+    completed_events: list[int] = []
+    for row in rows:
+        if not isinstance(row, dict) or str(row.get("kind") or "") != "semantic_frame":
+            continue
+        completed_events.extend(_record_complete_indexes(row))
+    completed_unique = sorted(set(completed_events))
+    timeline_complete = evidence_indexes["visual_model_complete"]
+    export_consumable = evidence_indexes["visual_export_consumable"]
+    return {
+        "schema": "video_knowledge_pipeline.vision_run_reconciliation.v1",
+        "run_complete_event_count": len(completed_events),
+        "run_complete_unique_count": len(completed_unique),
+        "run_complete_unique_indexes": completed_unique,
+        "duplicate_run_complete_event_count": len(completed_events) - len(completed_unique),
+        "timeline_complete_count": len(timeline_complete),
+        "timeline_complete_indexes": timeline_complete,
+        "export_consumable_count": len(export_consumable),
+        "export_consumable_indexes": export_consumable,
+        "run_complete_not_in_timeline_indexes": sorted(
+            set(completed_unique) - set(timeline_complete)
+        ),
+        "timeline_complete_without_logged_run_indexes": sorted(
+            set(timeline_complete) - set(completed_unique)
+        ),
+    }
+
+
+def _record_complete_indexes(row: dict[str, Any]) -> list[int]:
+    explicit = [
+        int(value)
+        for value in row.get("complete_indexes") or []
+        if _int_value(value) > 0
+    ]
+    if explicit:
+        return explicit
+    diffs = [
+        int(value.get("index"))
+        for value in row.get("timeline_diff") or []
+        if isinstance(value, dict) and _int_value(value.get("index")) > 0
+    ]
+    if diffs:
+        return diffs
+    selected = [
+        int(value)
+        for value in row.get("candidate_indexes") or []
+        if _int_value(value) > 0
+    ]
+    if int(row.get("complete_count") or 0) == len(selected):
+        return selected
+    return []
 
 
 def vision_analysis_restore_plan(
@@ -1263,6 +1508,21 @@ def _vision_analysis_run_record(
         "incomplete_count": sum(1 for item in results if _result_understanding(item).get("validation_status") == "incomplete"),
         "complete_count": sum(1 for item in results if item.get("complete")),
         "truncated_count": sum(1 for item in results if item.get("truncated")),
+        "complete_indexes": [
+            int(item.get("index"))
+            for item in results
+            if item.get("complete") and _int_value(item.get("index")) > 0
+        ],
+        "truncated_indexes": [
+            int(item.get("index"))
+            for item in results
+            if item.get("truncated") and _int_value(item.get("index")) > 0
+        ],
+        "failed_indexes": [
+            int(item.get("index"))
+            for item in results
+            if item.get("executed") and not item.get("ok") and _int_value(item.get("index")) > 0
+        ],
         "updated_count": int(summary.get("updated") or 0),
         "timeline_diff_count": len(timeline_diff),
         "timeline_diff": timeline_diff,

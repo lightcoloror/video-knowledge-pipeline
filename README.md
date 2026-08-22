@@ -61,8 +61,15 @@ uv run --project portability --offline --no-sync video-knowledge-portable valida
 
 ## 常用命令
 
+仓库开发态在 Windows 上统一从仓库根目录使用
+`.\scripts\video-knowledge.ps1 <command> ...`。该 wrapper 会把 `src` 注入
+`PYTHONPATH`；只有已经安装本 package（例如 editable install）或自行设置了
+`PYTHONPATH=src` 时，才直接运行 `python -m video_knowledge_pipeline.cli ...`。
+直接从未安装的源码根目录调用 Python module 出现 `ModuleNotFoundError` 不代表
+VKP 环境或模型损坏。
+
 ```powershell
-python -m video_knowledge_pipeline.cli config-status
+.\scripts\video-knowledge.ps1 config-status
 
 .\scripts\video-knowledge.ps1 openclaw-bridge-status
 

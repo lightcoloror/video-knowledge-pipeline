@@ -845,21 +845,22 @@ def _render_reduce_prompt(
 5. 视觉证据未执行时必须如实说明。
 6. 不直接编写 Markdown；先生成互斥、有序的主题结构，再由 VKP 确定性渲染读者正文。
 7. 正文默认控制在 900–1300 个中文字符；复杂长内容最多 1600 字，优先删同义重复，不得删掉任何章节的独有信息。
-8. “分段总结”必须原样包含全片首尾时间戳 `{first_time}` 与 `{last_time}`。
-9. “关键观点”“可执行动作清单”“高频话术”中的每一项都必须带来源时间戳，并且每个栏目整体至少覆盖前段和后段两个时间区间。
-10. 基本信息只能使用输入中明确存在的标题、讲师、时长等事实；视觉证据独有或冲突的数字放入待复核，不得当作确定事实。
-11. 每条确定性内容必须能回链到同章 facts 中的 time_range、evidence_ids 和 source_kinds；不得补造不存在的 evidence_id。
-12. fact_status=review_gap_not_fact、review_only evidence 或 legacy_unbound 只能进入“待复核点 / 低置信内容”，不得提升为确定事实。
-13. fact_status=candidate_evidence 表示来源内候选证据，不代表外部世界已核真；任务是忠实还原说话人原意，主观评价应归因给说话人，不做外部事实裁判。
-14. 数字、姓名、产品名或专业术语若没有 eligible evidence_id，必须保留原说话人表述并标明来源不充分，不得自行纠正或扩写。
-15. core_insights 与 principles 不得同义重复；主题标题必须是读者可理解的语义标题，禁止使用截断口语、元话术或“章节一”等占位名。
-16. themes 必须按时间排序且互不重叠，并使用“问题/原因/方法/案例/行动”字段；没有证据的字段返回空字符串，不得补造。
-17. actions 只保留明确可执行动作；章节标题、视觉缺口、背景介绍和一般观点不得伪装成行动项。
-18. verbatim_quote 必须能在相应 evidence snippet 中逐字找到；否则使用 reusable_expression，不得加引号冒充原句。 普通结论优先引用每章 eligible-evidence-set；只有逐字原句才引用单条 snippet ID。
-19. 严格控制数组规模：core_insights 3–6 项（短内容不得为凑数重复观点）、themes 3–8 项、principles 3–5 项、actions 0–8 项、reusable_expressions 0–5 项、review_items 0–6 项。
-20. 直接输出最终 JSON；不要在隐藏推理或解释中重复输入材料。
-21. interview-v1/medical-insurance-interview-v1：不推断姓名身份，使用匿名角色；个人医疗保险经历必须归因给受访者，不改写为普适建议，actions 仅保留明确承诺。
-22. medical-insurance-interview-v1：只写事实时间线、原话感受、已确认信息、待核实和隐私边界；禁方法论、高频话术与可复用表达。
+8. 默认序号使用阿拉伯数字层级：主栏目为 `1`、`2`、`3`，子项为 `1.1.1`、`1.1.2`；禁止使用甲乙丙丁或章节一/二/三作为默认编号。
+9. “分段总结”必须原样包含全片首尾时间戳 `{first_time}` 与 `{last_time}`。
+10. “关键观点”“可执行动作清单”“高频话术”中的每一项都必须带来源时间戳，并且每个栏目整体至少覆盖前段和后段两个时间区间。
+11. 基本信息只能使用输入中明确存在的标题、讲师、时长等事实；视觉证据独有或冲突的数字放入待复核，不得当作确定事实。
+12. 每条确定性内容必须能回链到同章 facts 中的 time_range、evidence_ids 和 source_kinds；不得补造不存在的 evidence_id。
+13. fact_status=review_gap_not_fact、review_only evidence 或 legacy_unbound 只能进入“待复核点 / 低置信内容”，不得提升为确定事实。
+14. fact_status=candidate_evidence 表示来源内候选证据，不代表外部世界已核真；任务是忠实还原说话人原意，主观评价应归因给说话人，不做外部事实裁判。
+15. 数字、姓名、产品名或专业术语若没有 eligible evidence_id，必须保留原说话人表述并标明来源不充分，不得自行纠正或扩写。
+16. core_insights 与 principles 不得同义重复；主题标题必须是读者可理解的语义标题，禁止使用截断口语、元话术或“章节一”等占位名。
+17. themes 必须按时间排序且互不重叠，并使用“问题/原因/方法/案例/行动”字段；没有证据的字段返回空字符串，不得补造。
+18. actions 只保留明确可执行动作；章节标题、视觉缺口、背景介绍和一般观点不得伪装成行动项。
+19. verbatim_quote 必须能在相应 evidence snippet 中逐字找到；否则使用 reusable_expression，不得加引号冒充原句。 普通结论优先引用每章 eligible-evidence-set；只有逐字原句才引用单条 snippet ID。
+20. 严格控制数组规模：core_insights 3–6 项（短内容不得为凑数重复观点）、themes 3–8 项、principles 3–5 项、actions 0–8 项、reusable_expressions 0–5 项、review_items 0–6 项。
+21. 直接输出最终 JSON；不要在隐藏推理或解释中重复输入材料。
+22. interview-v1/medical-insurance-interview-v1：不推断姓名身份，使用匿名角色；个人医疗保险经历必须归因给受访者，不改写为普适建议，actions 仅保留明确承诺。
+23. medical-insurance-interview-v1：只写事实时间线、原话感受、已确认信息、待核实和隐私边界；禁方法论、高频话术与可复用表达。
 """.strip()
     return instructions + "\n\n输入 JSON：\n" + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
@@ -993,7 +994,8 @@ def _normalise_markdown(value: str, *, title: str = "") -> str:
         if not line.startswith("# "):
             continue
         heading = line[2:].strip()
-        if any(heading.startswith(required) for required in section_headings):
+        heading_without_number = re.sub(r"^\d+(?:\.\d+)*[.)、]?\s+", "", heading)
+        if any(heading_without_number.startswith(required) for required in section_headings):
             lines[index] = "## " + heading
     first_index = next((index for index, line in enumerate(lines) if line.strip()), 0)
     if lines and lines[first_index].startswith("## "):

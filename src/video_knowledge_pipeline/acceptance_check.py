@@ -157,6 +157,20 @@ def render_acceptance_check_markdown(report: dict[str, Any]) -> str:
             f"- Export freshness：`{summary.get('export_freshness', 'unknown')}`",
         ]
     )
+    review_queue = summary.get("review_queue") if isinstance(summary.get("review_queue"), dict) else {}
+    if review_queue:
+        lines.extend(
+            [
+                "",
+                "## 分组复核队列",
+                "",
+                f"- Transcript review targets：`{review_queue.get('transcript_review_targets', 0)}`",
+                f"- OCR review targets：`{review_queue.get('ocr_review_targets', 0)}`",
+                f"- Semantic visual missing：`{review_queue.get('semantic_visual_missing', 0)}`",
+                f"- Temporal visual missing：`{review_queue.get('temporal_visual_missing', 0)}`",
+                f"- Deduplicated queue sample：`{review_queue.get('deduplicated_sample_indexes', [])}`",
+            ]
+        )
     provider_matrix = report.get("provider_matrix") if isinstance(report.get("provider_matrix"), dict) else {}
     matrix_rows = provider_matrix.get("providers") if isinstance(provider_matrix.get("providers"), list) else []
     if provider_matrix:
@@ -475,7 +489,9 @@ def _summary(
     gates = quality_gates or {}
     transcript_quality = gates.get("transcript") or {}
     summary_quality = gates.get("smart_summary") or {}
+    review_queue = _review_queue_summary(coverage, channels)
     return {
+        "timeline_items": int(coverage.get("timeline_items") or 0),
         "coverage_status": coverage.get("status", "unknown"),
         "transcript_quality_status": transcript_quality.get("status", "not_available"),
         "transcript_quality_classification": transcript_quality.get("classification", "not_available"),
@@ -503,7 +519,63 @@ def _summary(
         "review_closure_open": int(closure.get("open") or 0),
         "review_closure_closed": int(closure.get("closed") or 0),
         "review_closure_invalid": int(closure.get("invalid") or 0),
+        "review_queue": review_queue,
     }
+
+
+def _review_queue_summary(
+    coverage: dict[str, Any], channels: dict[str, dict[str, Any]]
+) -> dict[str, Any]:
+    samples = coverage.get("samples") if isinstance(coverage.get("samples"), dict) else {}
+    grouped_samples = {
+        "transcript": _int_list(samples.get("missing_transcript")),
+        "ocr": _int_list(samples.get("ocr_gap")),
+        "semantic_visual": _int_list(samples.get("missing_visual_understanding")),
+        "temporal_visual": _int_list(samples.get("temporal_sequence_without_analysis")),
+    }
+    deduplicated = sorted(
+        {
+            index
+            for values in grouped_samples.values()
+            for index in values
+        }
+    )
+    return {
+        "transcript_review_targets": _channel_gap_count(channels, "speech"),
+        "ocr_review_targets": _channel_gap_count(channels, "screen_text"),
+        "semantic_visual_missing": int(
+            coverage.get("semantic_frame_without_analysis") or 0
+        ),
+        "temporal_visual_missing": int(
+            coverage.get("temporal_sequence_without_analysis") or 0
+        ),
+        "sample_indexes_by_group": grouped_samples,
+        "deduplicated_sample_indexes": deduplicated,
+        "deduplicated_sample_count": len(deduplicated),
+        "note": "sample indexes are bounded by the coverage report; counts remain full-channel counts",
+    }
+
+
+def _channel_gap_count(
+    channels: dict[str, dict[str, Any]], key: str
+) -> int:
+    channel = channels.get(key) if isinstance(channels.get(key), dict) else {}
+    expected = int(channel.get("expected_count") or 0)
+    covered = int(channel.get("covered_count") or 0)
+    blockers = int(channel.get("blocker_count") or 0)
+    return max(blockers, expected - covered, 0)
+
+
+def _int_list(value: Any) -> list[int]:
+    result: list[int] = []
+    for item in value if isinstance(value, list) else []:
+        try:
+            number = int(item)
+        except (TypeError, ValueError):
+            continue
+        if number > 0 and number not in result:
+            result.append(number)
+    return result
 
 
 def _quality_gate_evidence(root: Path) -> dict[str, Any]:
